@@ -4,16 +4,51 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useAuth } from "@/contexts/AuthContext";
 
 const FormSchema = z
   .object({
+    first_name: z.string().min(1, { message: "First name is required." }),
+    last_name: z.string().min(1, { message: "Last name is required." }),
     email: z.string().email({ message: "Please enter a valid email address." }),
-    password: z.string().min(6, { message: "Password must be at least 6 characters." }),
-    confirmPassword: z.string().min(6, { message: "Confirm Password must be at least 6 characters." }),
+    phone: z
+      .string()
+      .optional()
+      .refine((v) => v === undefined || v === "" || /^\+?[\d\s\-()]{7,}$/.test(v), {
+        message: "Please enter a valid phone number.",
+      }),
+    department: z
+      .enum(["sales", "design", "installation", "admin", "management"])
+      .optional()
+      .or(z.string().optional()),
+    password: z
+      .string()
+      .min(8, { message: "Password must be at least 8 characters." })
+      .refine(
+        (val) => /[a-z]/.test(val) && /[A-Z]/.test(val) && /\d/.test(val),
+        { message: "Password must include uppercase, lowercase, and a number." }
+      ),
+    confirmPassword: z.string().min(1, { message: "Confirm your password." }),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: "Passwords do not match.",
@@ -21,60 +56,201 @@ const FormSchema = z
   });
 
 export function RegisterForm() {
+  const { register: authRegister } = useAuth();
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
     defaultValues: {
+      first_name: "",
+      last_name: "",
       email: "",
+      phone: "",
+      department: "",
       password: "",
       confirmPassword: "",
     },
   });
 
   const onSubmit = async (data: z.infer<typeof FormSchema>) => {
-    toast("You submitted the following values", {
-      description: (
-        <pre className="mt-2 w-[320px] rounded-md bg-neutral-950 p-4">
-          <code className="text-white">{JSON.stringify(data, null, 2)}</code>
-        </pre>
-      ),
-    });
+    setLoading(true);
+
+    const payload = {
+      email: data.email,
+      password: data.password,
+      first_name: data.first_name,
+      last_name: data.last_name,
+      phone: data.phone || "",
+      department: (data.department as string) || "",
+    };
+
+    try {
+      const result = await authRegister(payload);
+
+      if (result.success) {
+        toast("Registration successful", {
+          description: "Your account has been created. Redirecting to login...",
+        });
+
+        // allow user to see the toast briefly
+        setTimeout(() => {
+          router.push("/login?message=Registration successful. Please sign in.");
+        }, 900);
+
+        form.reset();
+      } else {
+        toast(result.error || "Registration failed");
+      }
+    } catch (err: any) {
+      toast(`An unexpected error occurred: ${err?.message ?? String(err)}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="first_name"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>First Name *</FormLabel>
+                <FormControl>
+                  <Input
+                    id="first_name"
+                    placeholder="First name"
+                    autoComplete="given-name"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="last_name"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Last Name *</FormLabel>
+                <FormControl>
+                  <Input
+                    id="last_name"
+                    placeholder="Last name"
+                    autoComplete="family-name"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
         <FormField
           control={form.control}
           name="email"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Email Address</FormLabel>
+              <FormLabel>Email Address *</FormLabel>
               <FormControl>
-                <Input id="email" type="email" placeholder="you@example.com" autoComplete="email" {...field} />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  {...field}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
           )}
         />
+
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="phone"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Phone</FormLabel>
+                <FormControl>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    placeholder="+1234567890"
+                    autoComplete="tel"
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="department"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Department</FormLabel>
+                <FormControl>
+                  <Select
+                    onValueChange={(val) => field.onChange(val)}
+                    value={(field.value as string) || ""}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sales">Sales</SelectItem>
+                      <SelectItem value="design">Design</SelectItem>
+                      <SelectItem value="installation">Installation</SelectItem>
+                      <SelectItem value="admin">Administration</SelectItem>
+                      <SelectItem value="management">Management</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
         <FormField
           control={form.control}
           name="password"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Password</FormLabel>
+              <FormLabel>Password *</FormLabel>
               <FormControl>
-                <Input id="password" type="password" placeholder="••••••••" autoComplete="new-password" {...field} />
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="••••••••"
+                  autoComplete="new-password"
+                  {...field}
+                />
               </FormControl>
+              <p className="text-xs text-gray-500 mt-1">
+                Must be at least 8 characters with uppercase, lowercase, and number
+              </p>
               <FormMessage />
             </FormItem>
           )}
         />
+
         <FormField
           control={form.control}
           name="confirmPassword"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Confirm Password</FormLabel>
+              <FormLabel>Confirm Password *</FormLabel>
               <FormControl>
                 <Input
                   id="confirmPassword"
@@ -88,8 +264,9 @@ export function RegisterForm() {
             </FormItem>
           )}
         />
-        <Button className="w-full" type="submit">
-          Register
+
+        <Button className="w-full" type="submit" disabled={loading}>
+          {loading ? "Creating account..." : "Register"}
         </Button>
       </form>
     </Form>

@@ -8,6 +8,7 @@ import { APP_CONFIG } from "@/config/app-config";
 import { getPreference } from "@/server/server-actions";
 import { PreferencesStoreProvider } from "@/stores/preferences/preferences-provider";
 import { THEME_MODE_VALUES, THEME_PRESET_VALUES, type ThemePreset, type ThemeMode } from "@/types/preferences/theme";
+import { Providers } from '@/components/providers/Providers';
 
 import "./globals.css";
 
@@ -30,10 +31,12 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       suppressHydrationWarning
     >
       <body className={`${inter.className} min-h-screen antialiased`}>
-        <PreferencesStoreProvider themeMode={themeMode} themePreset={themePreset}>
-          {children}
-          <Toaster />
-        </PreferencesStoreProvider>
+        <Providers>
+          <PreferencesStoreProvider themeMode={themeMode} themePreset={themePreset}>
+            {children}
+            <Toaster />
+          </PreferencesStoreProvider>
+        </Providers>
       </body>
     </html>
   );

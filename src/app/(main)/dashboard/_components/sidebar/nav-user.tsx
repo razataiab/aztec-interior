@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { EllipsisVertical, CircleUser, CreditCard, MessageSquareDot, LogOut } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -14,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { getInitials } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function NavUser({
   user,
@@ -25,6 +28,25 @@ export function NavUser({
   };
 }) {
   const { isMobile } = useSidebar();
+  const { logout } = useAuth();
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+
+  const handleLogout = async () => {
+    console.log('🖱️ NavUser logout button clicked');
+    setLoading(true);
+    try {
+      console.log('🔄 Calling logout from AuthContext...');
+      await logout();
+      console.log('✅ Logout completed');
+    } catch (err) {
+      console.error("❌ Logout failed:", err);
+      // Fallback navigation if logout fails
+      router.push("/login");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <SidebarMenu>
@@ -80,9 +102,9 @@ export function NavUser({
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={handleLogout} disabled={loading} className="flex items-center gap-2">
               <LogOut />
-              Log out
+              {loading ? "Logging out..." : "Log out"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

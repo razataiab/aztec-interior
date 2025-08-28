@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -9,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "next/navigation";
 
 const FormSchema = z.object({
   email: z.string().email({ message: "Please enter a valid email address." }),
@@ -16,7 +19,15 @@ const FormSchema = z.object({
   remember: z.boolean().optional(),
 });
 
-export function LoginForm() {
+interface LoginFormProps {
+  onSuccess?: () => void;
+}
+
+export function LoginForm({ onSuccess }: LoginFormProps) {
+  const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
+  const router = useRouter();
+
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
     defaultValues: {
@@ -27,13 +38,37 @@ export function LoginForm() {
   });
 
   const onSubmit = async (data: z.infer<typeof FormSchema>) => {
-    toast("You submitted the following values", {
-      description: (
-        <pre className="mt-2 w-[320px] rounded-md bg-neutral-950 p-4">
-          <code className="text-white">{JSON.stringify(data, null, 2)}</code>
-        </pre>
-      ),
-    });
+    setLoading(true);
+    
+    try {
+      console.log('🔄 Attempting login with:', data.email);
+      const result = await login(data.email, data.password);
+      
+      if (result.success) {
+        toast.success("Login successful!", {
+          description: "Welcome back! Redirecting to dashboard...",
+        });
+        
+        // Call onSuccess callback if provided
+        if (onSuccess) {
+          onSuccess();
+        } else {
+          // Default behavior: redirect to dashboard
+          router.replace("/dashboard");
+        }
+      } else {
+        toast.error("Login failed", {
+          description: result.error || "Please check your credentials and try again.",
+        });
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+      toast.error("Login failed", {
+        description: "An unexpected error occurred. Please try again.",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -46,7 +81,14 @@ export function LoginForm() {
             <FormItem>
               <FormLabel>Email Address</FormLabel>
               <FormControl>
-                <Input id="email" type="email" placeholder="you@example.com" autoComplete="email" {...field} />
+                <Input 
+                  id="email" 
+                  type="email" 
+                  placeholder="you@example.com" 
+                  autoComplete="email" 
+                  disabled={loading}
+                  {...field} 
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -64,6 +106,7 @@ export function LoginForm() {
                   type="password"
                   placeholder="••••••••"
                   autoComplete="current-password"
+                  disabled={loading}
                   {...field}
                 />
               </FormControl>
@@ -82,6 +125,7 @@ export function LoginForm() {
                   checked={field.value}
                   onCheckedChange={field.onChange}
                   className="size-4"
+                  disabled={loading}
                 />
               </FormControl>
               <FormLabel htmlFor="login-remember" className="text-muted-foreground ml-1 text-sm font-medium">
@@ -90,8 +134,8 @@ export function LoginForm() {
             </FormItem>
           )}
         />
-        <Button className="w-full" type="submit">
-          Login
+        <Button className="w-full" type="submit" disabled={loading}>
+          {loading ? "Logging in..." : "Login"}
         </Button>
       </form>
     </Form>

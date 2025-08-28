@@ -1,11 +1,10 @@
-import { z } from "zod";
+import z from "zod";
 
-export const sectionSchema = z.object({
-  id: z.number(),
-  header: z.string(),
-  type: z.string(),
+export const recentLeadSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  company: z.string(),
   status: z.string(),
-  target: z.string(),
-  limit: z.string(),
-  reviewer: z.string(),
+  source: z.string(),
+  lastActivity: z.string(),
 });
