@@ -1,6 +1,5 @@
 "use client";
-
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { 
@@ -9,7 +8,50 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowLeft, Edit, FileText, ChevronDown, Briefcase, CheckSquare } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { 
+  ArrowLeft, 
+  Edit, 
+  FileText, 
+  ChevronDown, 
+  Briefcase, 
+  CheckSquare, 
+  Link, 
+  Copy, 
+  Check,
+  Phone,
+  Mail,
+  MessageSquare,
+  Calendar,
+  MapPin
+} from "lucide-react";
+
+interface Customer {
+  id: string;
+  name: string;
+  address: string;
+  postcode: string;
+  phone: string;
+  email: string;
+  contact_made: 'Yes' | 'No' | 'Unknown';
+  preferred_contact_method: 'Phone' | 'Email' | 'WhatsApp';
+  marketing_opt_in: boolean;
+  date_of_measure: string;
+  status: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by: string;
+  form_submissions: any[];
+}
 
 // Mapping known form keys to friendly labels
 const FIELD_LABELS: Record<string, string> = {
@@ -23,7 +65,7 @@ const FIELD_LABELS: Record<string, string> = {
   notes: "Notes",
 };
 
-// Format date to readable format (date only)
+// Format date to readable format
 const formatDate = (dateString: string) => {
   if (!dateString) return "—";
   try {
@@ -41,11 +83,15 @@ const formatDate = (dateString: string) => {
 export default function CustomerDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const id = params?.id;
-  const [customer, setCustomer] = useState<any | null>(null);
+  const id = params?.id as string;
+  const [customer, setCustomer] = useState<Customer | null>(null);
   const [quotations, setQuotations] = useState<any[]>([]);
   const [jobs, setJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showLinkDialog, setShowLinkDialog] = useState(false);
+  const [generatedLink, setGeneratedLink] = useState("");
+  const [formType, setFormType] = useState("");
+  const [linkCopied, setLinkCopied] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -79,6 +125,37 @@ export default function CustomerDetailsPage() {
       .catch((err) => console.error("Error loading jobs:", err))
       .finally(() => setLoading(false));
   }, [id]);
+
+  const generateFormLink = async (type: "bedroom" | "kitchen") => {
+    try {
+      const response = await fetch(`http://127.0.0.1:5000/customers/${id}/generate-form-link`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ formType: type }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const fullLink = `${window.location.origin}/form/${data.token}?type=${type}&customerId=${id}`;
+        setGeneratedLink(fullLink);
+        setFormType(type);
+        setShowLinkDialog(true);
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+        alert(`Failed to generate ${type} form link: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error(`Network error generating ${type} form link:`, error);
+    }
+  };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(generatedLink);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  };
 
   const handleEdit = () => {
     router.push(`/dashboard/customers/${id}/edit`);
@@ -116,6 +193,23 @@ export default function CustomerDetailsPage() {
 
   const handleViewJob = (jobId: string) => {
     router.push(`/dashboard/jobs/${jobId}`);
+  };
+
+  const getContactStatusColor = (status: string) => {
+    switch (status) {
+      case 'Yes': return 'bg-green-100 text-green-800';
+      case 'No': return 'bg-red-100 text-red-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getContactMethodIcon = (method: string) => {
+    switch (method) {
+      case 'Phone': return <Phone className="h-4 w-4" />;
+      case 'Email': return <Mail className="h-4 w-4" />;
+      case 'WhatsApp': return <MessageSquare className="h-4 w-4" />;
+      default: return null;
+    }
   };
 
   const renderFormSubmission = (submission: any) => {
@@ -210,6 +304,27 @@ export default function CustomerDetailsPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Generate Form Links Dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="flex items-center space-x-2">
+                  <Link className="h-4 w-4" />
+                  <span>Generate Form</span>
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={() => generateFormLink("kitchen")} className="flex items-center space-x-2">
+                  <Link className="h-4 w-4" />
+                  <span>Kitchen Form Link</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => generateFormLink("bedroom")} className="flex items-center space-x-2">
+                  <Link className="h-4 w-4" />
+                  <span>Bedroom Form Link</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             
             <Button onClick={handleEdit} className="flex items-center space-x-2">
               <Edit className="h-4 w-4" />
@@ -223,41 +338,87 @@ export default function CustomerDetailsPage() {
       <div className="px-8 py-6">
         {/* Customer Information */}
         <div className="mb-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Contact Information</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-gray-900">Contact Information</h2>
+            <div className="flex items-center space-x-4">
+              {customer.date_of_measure && (
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                  <Calendar className="h-4 w-4" />
+                  <span>Measure: {formatDate(customer.date_of_measure)}</span>
+                </div>
+              )}
+              <span className={`inline-flex px-3 py-1 text-sm font-semibold rounded-full ${getContactStatusColor(customer.contact_made)}`}>
+                Contact Made: {customer.contact_made}
+              </span>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-6">
             <div className="flex flex-col">
               <span className="text-sm text-gray-500 font-medium">Name</span>
-              <span className="text-gray-900 mt-1 text-base">{customer.name || "—"}</span>
+              <span className="text-gray-900 mt-1 text-base font-medium">{customer.name || "—"}</span>
             </div>
+            
             <div className="flex flex-col">
               <span className="text-sm text-gray-500 font-medium">Email</span>
               <span className="text-gray-900 mt-1 text-base">{customer.email || "—"}</span>
             </div>
+            
             <div className="flex flex-col">
               <span className="text-sm text-gray-500 font-medium">Phone</span>
               <span className="text-gray-900 mt-1 text-base">{customer.phone || "—"}</span>
             </div>
-            <div className="flex flex-col">
+            
+            <div className="flex flex-col md:col-span-2">
               <span className="text-sm text-gray-500 font-medium">Address</span>
-              <span className="text-gray-900 mt-1 text-base">{customer.address || "—"}</span>
+              <div className="mt-1">
+                <span className="text-gray-900 text-base">{customer.address || "—"}</span>
+                {customer.postcode && (
+                  <div className="flex items-center mt-1 space-x-2">
+                    <MapPin className="h-4 w-4 text-gray-400" />
+                    <span className="text-sm text-gray-600 font-mono bg-gray-100 px-2 py-1 rounded">
+                      {customer.postcode}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
+            
             <div className="flex flex-col">
-              <span className="text-sm text-gray-500 font-medium">Status</span>
-              <span className="text-gray-900 mt-1">
-                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                  customer.status === 'active' ? 'bg-green-100 text-green-800' : 
-                  customer.status === 'inactive' ? 'bg-red-100 text-red-800' :
-                  'bg-gray-100 text-gray-800'
-                }`}>
-                  {customer.status || "Unknown"}
-                </span>
+              <span className="text-sm text-gray-500 font-medium">Preferred Contact</span>
+              <div className="mt-1">
+                {customer.preferred_contact_method ? (
+                  <div className="flex items-center space-x-2">
+                    {getContactMethodIcon(customer.preferred_contact_method)}
+                    <span className="text-gray-900 text-base">{customer.preferred_contact_method}</span>
+                  </div>
+                ) : (
+                  <span className="text-gray-900 text-base">—</span>
+                )}
+              </div>
+            </div>
+            
+            <div className="flex flex-col">
+              <span className="text-sm text-gray-500 font-medium">Marketing Opt-in</span>
+              <span className={`mt-1 text-base ${customer.marketing_opt_in ? 'text-green-600' : 'text-gray-600'}`}>
+                {customer.marketing_opt_in ? 'Yes' : 'No'}
               </span>
             </div>
+            
             <div className="flex flex-col">
               <span className="text-sm text-gray-500 font-medium">Customer Since</span>
               <span className="text-gray-900 mt-1 text-base">{formatDate(customer.created_at)}</span>
             </div>
           </div>
+
+          {customer.notes && (
+            <div className="mt-6">
+              <span className="text-sm text-gray-500 font-medium">Notes</span>
+              <div className="mt-2 p-3 bg-gray-50 rounded-lg">
+                <span className="text-gray-900 text-base whitespace-pre-wrap">{customer.notes}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Form Submission */}
@@ -267,8 +428,10 @@ export default function CustomerDetailsPage() {
           ) : (
             <div>
               <h2 className="text-xl font-semibold text-gray-900 mb-4">Form Submission</h2>
-              <div className="text-gray-500">
-                <p>No form submission found for this customer.</p>
+              <div className="text-gray-500 bg-gray-50 p-6 rounded-lg text-center">
+                <CheckSquare className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <p className="mb-2">No form submission found for this customer.</p>
+                <p className="text-sm">Generate a form link above to collect customer information.</p>
               </div>
             </div>
           )}
@@ -313,7 +476,8 @@ export default function CustomerDetailsPage() {
               ))}
             </div>
           ) : (
-            <div className="text-gray-500">
+            <div className="text-gray-500 bg-gray-50 p-6 rounded-lg text-center">
+              <Briefcase className="h-12 w-12 text-gray-300 mx-auto mb-3" />
               <p>No jobs found for this customer.</p>
             </div>
           )}
@@ -345,12 +509,37 @@ export default function CustomerDetailsPage() {
               ))}
             </div>
           ) : (
-            <div className="text-gray-500">
+            <div className="text-gray-500 bg-gray-50 p-6 rounded-lg text-center">
+              <FileText className="h-12 w-12 text-gray-300 mx-auto mb-3" />
               <p>No quotations found for this customer.</p>
             </div>
           )}
         </div>
       </div>
+
+      {/* Form Link Dialog */}
+      <Dialog open={showLinkDialog} onOpenChange={setShowLinkDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{formType === "kitchen" ? "Kitchen" : "Bedroom"} Checklist Form Link Generated</DialogTitle>
+            <DialogDescription>
+              Share this link with {customer.name} to fill out the {formType === "kitchen" ? "kitchen" : "bedroom"} checklist form. 
+              The form data will be associated with their existing customer record.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center space-x-2">
+            <Input
+              value={generatedLink}
+              readOnly
+              className="flex-1"
+            />
+            <Button onClick={copyToClipboard} variant="outline">
+              {linkCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {linkCopied ? "Copied!" : "Copy"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
