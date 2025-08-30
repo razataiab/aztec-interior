@@ -178,6 +178,7 @@ export default function CustomerEditPage() {
                 <div key={key} className="flex flex-col">
                   <Label className="text-sm text-gray-500 font-medium">{label}</Label>
                   {key === "notes" ? (
+                    
                     <Textarea
                       value={formData[key] || ""}
                       onChange={(e) => handleFormDataChange(key, e.target.value)}

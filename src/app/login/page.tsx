@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Command, Globe } from "lucide-react";
+import Image from "next/image";
+import { Globe } from "lucide-react";
 import { APP_CONFIG } from "@/config/app-config";
 import { LoginForm } from "/Users/razataiab/Desktop/next-shadcn-admin-dashboard/src/app/(main)/auth/_components/login-form";
 import { GoogleButton } from "/Users/razataiab/Desktop/next-shadcn-admin-dashboard/src/app/(main)/auth/_components/social-auth/google-button";
@@ -13,7 +14,14 @@ export default function LoginV2Enhanced() {
       <div className="bg-primary hidden lg:block lg:w-1/3">
         <div className="flex h-full flex-col items-center justify-center p-12 text-center">
           <div className="space-y-6">
-            <Command className="text-primary-foreground mx-auto size-12" />
+            {/* Replace Command icon with logo */}
+            <Image
+              src="/images/file1.svg"
+              alt="Logo"
+              width={80}  // adjust size as needed
+              height={80} // adjust size as needed
+              className="mx-auto"
+            />
             <div className="space-y-2">
               <h1 className="text-primary-foreground text-5xl font-light">Hello again</h1>
               <p className="text-primary-foreground/80 text-xl">Login to continue</p>
