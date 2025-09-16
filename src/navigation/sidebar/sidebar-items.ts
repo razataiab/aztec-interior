@@ -20,6 +20,7 @@ import {
   FileText,
   Settings,
   type LucideIcon,
+  Bot,
 } from "lucide-react";
 
 export interface NavSubItem {
@@ -58,6 +59,11 @@ export const sidebarItems: NavGroup[] = [
         icon: Home,
       },
       {
+        title: "Chatbot",
+        url: "/dashboard/chatbot",
+        icon: Bot,
+      },
+      {
         title: "Customers",
         url: "/dashboard/customers",
         icon: Users,
@@ -79,7 +85,7 @@ export const sidebarItems: NavGroup[] = [
       },
       {
         title: "Forms/Checklists",
-        url: "/forms",
+        url: "/dashboard/forms",
         icon: FileText,
       },
       {
