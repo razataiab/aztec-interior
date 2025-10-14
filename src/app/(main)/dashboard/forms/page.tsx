@@ -34,7 +34,7 @@ import {
 interface FormItem {
   label: string;
   icon: React.ElementType;
-  type?: "kitchen" | "bedroom" | "remedial" | "general";
+  type?: "kitchen" | "bedroom" | "remedial" | "general" | "receipt" | "deposit" | "final";
   requiresLink?: boolean; // For items that need link generation
   route?: string; // For direct navigation items
 }
@@ -107,7 +107,7 @@ const FormsAndChecklistsPage = () => {
     if (selectedForm?.requiresLink && selectedForm?.type) {
       await generateFormLink(selectedForm.type as "kitchen" | "bedroom", customer);
     }
-    // REMEDIAL/GENERAL CHECKLISTS: Staff navigates directly using the shared route
+    // STAFF NAVIGATION ITEMS: Navigates directly to the specified route
     else if (selectedForm?.route) {
       const queryParams = new URLSearchParams({
         customerId: selectedCustomer,
@@ -115,8 +115,10 @@ const FormsAndChecklistsPage = () => {
         customerAddress: customer.address,
         customerPhone: customer.phone,
         customerEmail: customer.email || "",
-        // Pass the specific checklist type for the destination page
+        // Pass the specific document type for the destination page
         type: selectedForm.type || "general",
+        // Added source=forms to distinguish navigation origin
+        source: "forms",
       });
 
       router.push(`${selectedForm.route}?${queryParams.toString()}`);
@@ -155,6 +157,7 @@ const FormsAndChecklistsPage = () => {
             customerName: customer.name,
             customerAddress: customer.address,
             customerPhone: customer.phone,
+            customerEmail: customer.email || "",
           });
 
           // This link is for the CLIENT and is tokenized/external
@@ -196,14 +199,12 @@ const FormsAndChecklistsPage = () => {
         {
           label: "Remedial Action Checklist",
           icon: CheckSquare,
-          // *** UPDATED ROUTE: Specific page for Remedial ***
           route: "/dashboard/checklists/remedial",
           type: "remedial" as const,
         },
         {
           label: "Checklist",
           icon: CheckSquare,
-          // Keep internal route for General Checklist
           route: "/dashboard/checklists/internal", 
           type: "general" as const,
         },
@@ -211,31 +212,46 @@ const FormsAndChecklistsPage = () => {
           label: "Kitchen Checklist Form (Client Link)",
           icon: Link,
           type: "kitchen" as const,
-          requiresLink: true // Uses generateFormLink
+          requiresLink: true 
         },
         {
           label: "Bedroom Checklist Form (Client Link)",
           icon: Link,
           type: "bedroom" as const,
-          requiresLink: true // Uses generateFormLink
+          requiresLink: true 
         },
       ] as FormItem[],
     },
     {
       title: "Documents",
       items: [
-        { label: "Quotation", icon: FileText },
-        { label: "Invoice", icon: FileText },
-        { label: "Proforma Invoice", icon: FileText },
-        { label: "Payment Terms", icon: DollarSign },
+        { label: "Quotation", icon: FileText, route: "/dashboard/quotes/create" },
+        { label: "Invoice", icon: FileText, route: "/dashboard/invoices/create" },
+        { label: "Proforma Invoice", icon: FileText, route: "/dashboard/invoices/create", type: "proforma" as const },
+        { label: "Payment Terms", icon: DollarSign, route: "/dashboard/payment-terms/create" },
       ] as FormItem[],
     },
     {
       title: "Receipts",
       items: [
-        { label: "Receipt", icon: Receipt },
-        { label: "Deposit Receipt", icon: Receipt },
-        { label: "Final Receipt", icon: Receipt },
+        { 
+            label: "Receipt", 
+            icon: Receipt, 
+            route: "/dashboard/checklists/receipt", 
+            type: "receipt" as const 
+        },
+        { 
+            label: "Deposit Receipt", 
+            icon: Receipt, 
+            route: "/dashboard/checklists/receipt", 
+            type: "deposit" as const 
+        },
+        { 
+            label: "Final Receipt", 
+            icon: Receipt, 
+            route: "/dashboard/checklists/receipt", 
+            type: "final" as const 
+        },
       ] as FormItem[],
     },
   ];

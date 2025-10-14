@@ -120,10 +120,18 @@ const FIELD_LABELS: Record<string, string> = {
   signature_data: "Signature",
   signature_date: "Signature Date",
   form_type: "Form Type",
-  // Auxiliary fields used for logic, should be filtered out from general display
+  amount_paid: "Paid Amount",
+  total_paid_to_date: "Total Paid To Date",
+  total_amount: "Total Order Value",
+  balance_to_pay: "Balance To Pay",
+  date_paid: "Receipt Date",
+  payment_method: "Payment Method",
+  payment_description: "Payment Description",
   sink_tap_customer_owned: "Sink/Tap Customer Owned",
   appliances_customer_owned: "Appliances Customer Owned",
 };
+
+const FINANCIAL_FIELDS = ["amount_paid", "total_paid_to_date", "total_amount", "balance_to_pay"];
 
 const formatDate = (dateString: string) => {
   if (!dateString) return "—";
@@ -235,8 +243,92 @@ export default function CustomerDetailsPage() {
         alert(`Failed to generate ${type} form link: ${errorData.error || "Unknown error"}`);
       }
     } catch (error) {
-      console.      console.error(`Network error generating ${type} form link:`, error);
+      console.error(`Network error generating ${type} form link:`, error);
       alert(`Network error: Please check your connection and try again.`);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleCreateKitchenChecklist = async () => {
+    if (generating) return;
+
+    setGenerating(true);
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:5000/customers/${id}/generate-form-link`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ formType: "kitchen" }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          const params = new URLSearchParams({
+            type: "kitchen",
+            customerId: String(id),
+            customerName: customer?.name || "",
+            customerAddress: customer?.address || "",
+            customerPhone: customer?.phone || "",
+          });
+          router.push(`/form/${data.token}?${params.toString()}`);
+        } else {
+          alert(`Failed to generate kitchen form: ${data.error}`);
+        }
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+        alert(`Failed to generate kitchen form: ${errorData.error || "Unknown error"}`);
+      }
+    } catch (error) {
+      console.error("Network error generating kitchen form:", error);
+      alert("Network error: Please check your connection and try again.");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleCreateBedroomChecklist = async () => {
+    if (generating) return;
+
+    setGenerating(true);
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:5000/customers/${id}/generate-form-link`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ formType: "bedroom" }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          const params = new URLSearchParams({
+            type: "bedroom",
+            customerId: String(id),
+            customerName: customer?.name || "",
+            customerAddress: customer?.address || "",
+            customerPhone: customer?.phone || "",
+          });
+          router.push(`/form/${data.token}?${params.toString()}`);
+        } else {
+          alert(`Failed to generate bedroom form: ${data.error}`);
+        }
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+        alert(`Failed to generate bedroom form: ${errorData.error || "Unknown error"}`);
+      }
+    } catch (error) {
+      console.error("Network error generating bedroom form:", error);
+      alert("Network error: Please check your connection and try again.");
     } finally {
       setGenerating(false);
     }
@@ -322,15 +414,54 @@ export default function CustomerDetailsPage() {
   };
 
   const handleCreateReceipt = () => {
-    router.push(`/dashboard/receipts/create?type=receipt&${buildCustomerQuery()}`);
+    const params = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      type: "receipt",
+      paidAmount: "0.00",
+      totalPaidToDate: "0.00",
+      balanceToPay: "0.00",
+      receiptDate: new Date().toISOString().split('T')[0],
+      paymentMethod: "BACS",
+      paymentDescription: "Payment received for your Kitchen/Bedroom Cabinetry.",
+    });
+    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
   };
 
   const handleCreateDepositReceipt = () => {
-    router.push(`/dashboard/receipts/create?type=deposit&${buildCustomerQuery()}`);
+    const params = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      type: "deposit",
+      paidAmount: "0.00",
+      totalPaidToDate: "0.00",
+      balanceToPay: "0.00",
+      receiptDate: new Date().toISOString().split('T')[0],
+      paymentMethod: "BACS",
+      paymentDescription: "Deposit payment received for your Kitchen/Bedroom Cabinetry.",
+    });
+    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
   };
 
   const handleCreateFinalReceipt = () => {
-    router.push(`/dashboard/receipts/create?type=final&${buildCustomerQuery()}`);
+    const params = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      type: "final",
+      paidAmount: "0.00",
+      totalPaidToDate: "0.00",
+      balanceToPay: "0.00",
+      receiptDate: new Date().toISOString().split('T')[0],
+      paymentMethod: "BACS",
+      paymentDescription: "Final payment received for your Kitchen/Bedroom Cabinetry.",
+    });
+    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
   };
 
   const handleCreateInvoice = () => {
@@ -374,7 +505,7 @@ export default function CustomerDetailsPage() {
   const humanizeLabel = (key: string) => {
     if (FIELD_LABELS[key]) return FIELD_LABELS[key];
     const fromHyphen = key.replace(/-/g, " ");
-    const fromUnderscore = fromHyphen.replace(/_/g, " ");
+    const fromUnderscore = key.replace(/_/g, " ");
     const spaced = fromUnderscore.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
     return spaced
       .split(" ")
@@ -382,8 +513,11 @@ export default function CustomerDetailsPage() {
       .join(" ");
   };
 
-  const humanizeValue = (val: any): string => {
+  const humanizeValue = (val: any, key?: string): string => {
     if (val === null || val === undefined || val === "") return "—";
+    
+    const isFinancial = key && FINANCIAL_FIELDS.includes(key);
+    
     if (typeof val === "string") {
       const str = val.trim();
       if (isUUID(str)) return "—";
@@ -391,16 +525,26 @@ export default function CustomerDetailsPage() {
         return formatDate(str);
       }
       if (/[-_]/.test(str)) {
-        return str
+        const cleanStr = str
           .replace(/[-_]/g, " ")
           .split(" ")
           .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
           .join(" ");
+        const floatValue = parseFloat(cleanStr.replace(/[^0-9.-]/g, ''));
+        return isFinancial && !isNaN(floatValue) ? `£${floatValue.toFixed(2)}` : cleanStr;
       }
-      return str.charAt(0).toUpperCase() + str.slice(1);
+      
+      const floatValue = parseFloat(str.replace(/[^0-9.-]/g, ''));
+      return isFinancial && !isNaN(floatValue) ? `£${floatValue.toFixed(2)}` : str.charAt(0).toUpperCase() + str.slice(1);
     }
-    if (typeof val === "number" || typeof val === "boolean") return String(val);
-    if (Array.isArray(val)) return val.map(humanizeValue).join(", ");
+    
+    if (typeof val === "number") {
+        const formatted = val.toFixed(2);
+        return isFinancial ? `£${formatted}` : String(val);
+    }
+
+    if (typeof val === "boolean") return String(val);
+    if (Array.isArray(val)) return val.map(v => humanizeValue(v)).join(", ");
     if (typeof val === "object") return JSON.stringify(val, null, 2);
     return String(val);
   };
@@ -416,12 +560,17 @@ export default function CustomerDetailsPage() {
       formDataRaw = submission.form_data || {};
     }
 
+    const formType = (formDataRaw?.form_type || "").toString().toLowerCase();
+    
+    if (formType.includes("receipt") || formType.includes("deposit") || formType.includes("final") || formType.includes("invoice") || formType.includes("proforma") || formType.includes("terms")) {
+      return "document";
+    }
+
     const checklistType = (formDataRaw?.checklistType || "").toString().toLowerCase();
     if (checklistType === "remedial") {
       return "remedial";
     }
 
-    const formType = (formDataRaw?.form_type || "").toString().toLowerCase();
     if (formType.includes("bed")) return "bedroom";
     if (formType.includes("kitchen")) return "kitchen";
     
@@ -430,6 +579,17 @@ export default function CustomerDetailsPage() {
 
   const getFormTitle = (submission: FormSubmission) => {
     const type = getFormType(submission);
+    let formDataRaw;
+    try {
+      formDataRaw =
+        typeof submission.form_data === "string"
+          ? JSON.parse(submission.form_data)
+          : submission.form_data;
+    } catch {
+      formDataRaw = submission.form_data || {};
+    }
+    const formTypeRaw = (formDataRaw?.form_type || "").toString();
+
     switch (type) {
       case "remedial":
         return "Remedial Action Checklist";
@@ -437,15 +597,148 @@ export default function CustomerDetailsPage() {
         return "Bedroom Checklist";
       case "kitchen":
         return "Kitchen Checklist";
+      case "document":
+        // Clean up the form type - remove duplicate words and format properly
+        const parts = formTypeRaw.split(/[-_]/);
+        // Remove duplicate consecutive words (case-insensitive)
+        const cleanedParts = parts.filter((word, index) => {
+          if (index === 0) return true;
+          return word.toLowerCase() !== parts[index - 1].toLowerCase();
+        });
+        return cleanedParts
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(" ");
       default:
         return "Form Submission";
     }
   };
 
+  const Row: React.FC<{ label: string; value: any; name?: string }> = ({ label, value, name }) => {
+    const renderValue = (v: any) => {
+      if (v === null || v === undefined || v === "") {
+        return <span className="text-gray-500">—</span>;
+      }
+      if (Array.isArray(v)) {
+        return <span className="text-sm whitespace-pre-wrap">{v.map(item => humanizeValue(item, name)).join(", ")}</span>;
+      }
+      if (typeof v === "object" && v !== null) {
+        if (Object.keys(v).some(key => typeof v[key] !== 'string' && typeof v[key] !== 'number')) {
+             return <pre className="text-sm whitespace-pre-wrap bg-white p-3 rounded">{JSON.stringify(v, null, 2)}</pre>;
+        }
+      }
+      return <span className="text-sm">{humanizeValue(v, name)}</span>;
+    };
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 py-3 items-start border-b last:border-b-0">
+        <div className="md:col-span-1">
+          <div className="text-sm font-medium text-gray-700">{label}</div>
+        </div>
+        <div className="md:col-span-2">
+          <div className="text-sm text-gray-900">{renderValue(value)}</div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderReceiptData = (formData: Record<string, any>) => {
+    console.log("Receipt formData:", formData);
+    
+    const parseAmount = (value: any) => {
+      if (!value) return 0;
+      if (typeof value === 'number') return value;
+      if (typeof value === 'string') {
+        return parseFloat(value.replace(/[£$,]/g, '')) || 0;
+      }
+      return 0;
+    };
+
+    const balanceToPay = parseAmount(formData.balance_to_pay || formData.balanceToPay || formData['Balance To Pay']);
+    const amountPaid = parseAmount(formData.paid_amount || formData.amount_paid || formData.amountPaid || formData.paidAmount || formData['Paid Amount']);
+    const totalPaidToDate = parseAmount(formData.total_paid_to_date || formData.totalPaidToDate || formData.total_paid || formData['Total Paid To Date']) || amountPaid;
+    
+    console.log("Parsed values:", { balanceToPay, amountPaid, totalPaidToDate });
+
+    const derivedData: Record<string, any> = {
+      ...formData,
+      balance_to_pay: balanceToPay.toFixed(2),
+      amount_paid: amountPaid.toFixed(2), 
+      total_paid_to_date: totalPaidToDate.toFixed(2),
+      payment_description: formData.payment_description || formData.paymentDescription || formData['Payment Description'],
+      payment_method: formData.payment_method || formData.paymentMethod || formData['Payment Method'],
+      document_type_display: formData.receipt_type || formData.receiptType || formData['Receipt Type'] || "Receipt",
+      date_paid: formData.receipt_date || formData.date_paid || formData.receiptDate || formData['Receipt Date'],
+    };
+
+    const customFinancialFields = ["balance_to_pay", "amount_paid", "total_paid_to_date"];
+    const customAdditionalFields = ["payment_description", "payment_method", "document_type_display", "date_paid"];
+
+    const keys = Object.keys(derivedData).filter((k) => derivedData[k] !== null && derivedData[k] !== undefined && derivedData[k] !== "");
+
+    const handleViewReceipt = () => {
+      const params = new URLSearchParams({
+        customerId: customer?.id || "",
+        customerName: customer?.name || "",
+        customerAddress: customer?.address || "",
+        customerPhone: customer?.phone || "",
+        type: derivedData.document_type_display?.toLowerCase() || "receipt",
+        paidAmount: derivedData.amount_paid || "0.00",
+        totalPaidToDate: derivedData.total_paid_to_date || "0.00",
+        balanceToPay: derivedData.balance_to_pay || "0.00",
+        receiptDate: derivedData.date_paid || new Date().toISOString().split('T')[0],
+        paymentMethod: derivedData.payment_method || "BACS",
+        paymentDescription: derivedData.payment_description || "Payment received for your Kitchen/Bedroom Cabinetry.",
+      });
+      // Updated path to match your folder structure
+      router.push(`/dashboard/checklists/receipt?${params.toString()}`);
+    };
+
+    return (
+      <div className="space-y-6">
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-md font-semibold text-gray-900">Financial Overview</h3>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleViewReceipt}
+              className="flex items-center space-x-2"
+            >
+              <Receipt className="h-4 w-4" />
+              <span>View Receipt</span>
+            </Button>
+          </div>
+          <div className="bg-white rounded-lg p-4 shadow-sm">
+            {customFinancialFields
+                .filter(k => keys.includes(k) || k === 'balance_to_pay')
+                .map(k => (
+                    <Row key={k} label={humanizeLabel(k)} value={derivedData[k]} name={k} />
+                ))}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="text-md font-semibold mb-3 text-gray-900">Additional Information</h3>
+          <div className="bg-white rounded-lg p-4 shadow-sm">
+            {customAdditionalFields
+              .filter(k => derivedData[k])
+              .map(k => (
+                <Row 
+                    key={k} 
+                    label={k === 'document_type_display' ? 'Type' : humanizeLabel(k)} 
+                    value={derivedData[k]} 
+                    name={k} 
+                />
+              ))}
+          </div>
+        </section>
+      </div>
+    );
+  };
+
   const renderRemedialForm = (formData: any) => {
     const items = formData.items || [];
     
-    // Extract customer info from the form submission for consistency
     const customerName = formData.customerName || formData.customer_name || "—";
     const customerPhone = formData.customerPhone || formData.customer_phone || "—";
     const customerAddress = formData.customerAddress || formData.customer_address || "—";
@@ -618,12 +911,12 @@ export default function CustomerDetailsPage() {
                   <DollarSign className="h-4 w-4" />
                   <span>Payment Terms</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => generateFormLink("kitchen")} className="flex items-center space-x-2" disabled={generating}>
-                  <Link className="h-4 w-4" />
+                <DropdownMenuItem onClick={handleCreateKitchenChecklist} className="flex items-center space-x-2" disabled={generating}>
+                  <CheckSquare className="h-4 w-4" />
                   <span>Kitchen Checklist Form</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => generateFormLink("bedroom")} className="flex items-center space-x-2" disabled={generating}>
-                  <Link className="h-4 w-4" />
+                <DropdownMenuItem onClick={handleCreateBedroomChecklist} className="flex items-center space-x-2" disabled={generating}>
+                  <CheckSquare className="h-4 w-4" />
                   <span>Bedroom Checklist Form</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -933,6 +1226,10 @@ export default function CustomerDetailsPage() {
                 if (currentFormType === "remedial") {
                   return renderRemedialForm(rawData);
                 }
+                
+                if (currentFormType === "document") {
+                    return renderReceiptData(rawData);
+                }
 
                 const inferredType = (rawData.form_type || "")
                   .toString()
@@ -944,31 +1241,6 @@ export default function CustomerDetailsPage() {
                   : (formType || "").toLowerCase();
 
                 const displayed = new Set<string>();
-
-                const renderValue = (v: any) => {
-                  if (v === null || v === undefined || v === "") {
-                    return <span className="text-gray-500">—</span>;
-                  }
-                  if (Array.isArray(v)) {
-                    return <span className="text-sm whitespace-pre-wrap">{v.map(humanizeValue).join(", ")}</span>;
-                  }
-                  if (typeof v === "object") {
-                    return <pre className="text-sm whitespace-pre-wrap bg-white p-3 rounded">{JSON.stringify(v, null, 2)}</pre>;
-                  }
-                  return <span className="text-sm">{humanizeValue(v)}</span>;
-                };
-
-                // Helper component for rendering rows
-                const Row: React.FC<{ label: string; value: any }> = ({ label, value }) => (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 py-3 items-start border-b last:border-b-0">
-                    <div className="md:col-span-1">
-                      <div className="text-sm font-medium text-gray-700">{label}</div>
-                    </div>
-                    <div className="md:col-span-2">
-                      <div className="text-sm text-gray-900">{renderValue(value)}</div>
-                    </div>
-                  </div>
-                );
 
                 const keys = Object.keys(rawData).filter((k) => {
                   const low = k.toLowerCase();
@@ -993,8 +1265,8 @@ export default function CustomerDetailsPage() {
                   "sink_details", "tap_details", "other_appliances", "appliances"
                 ];
                 
-                // Fields to always skip in general sections, but might be used conditionally (like above)
                 const auxiliaryFields = ['sink_tap_customer_owned', 'appliances_customer_owned'];
+                const dateFields = ['appointment_date', 'completion_date', 'deposit_date', 'installation_date', 'survey_date'];
 
                 return (
                   <div className="space-y-6">
@@ -1005,7 +1277,7 @@ export default function CustomerDetailsPage() {
                           .filter(k => keys.includes(k) && (k !== "room" || inferredType === "bedroom"))
                           .map(k => {
                             displayed.add(k);
-                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                           })}
                       </div>
                     </section>
@@ -1017,7 +1289,7 @@ export default function CustomerDetailsPage() {
                           .filter(k => keys.includes(k) && (k !== "drawer_color" || inferredType === "kitchen"))
                           .map(k => {
                             displayed.add(k);
-                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                           })}
                       </div>
                     </section>
@@ -1030,7 +1302,7 @@ export default function CustomerDetailsPage() {
                             .filter(k => keys.includes(k))
                             .map(k => {
                               displayed.add(k);
-                              return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                              return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                             })}
                         </div>
                       </section>
@@ -1045,45 +1317,38 @@ export default function CustomerDetailsPage() {
                             .map(k => {
                               displayed.add(k);
                               
-                              // Check the sink/tap owned status (assuming this key exists in your form data)
                               const sinkTapOwned = String(rawData.sink_tap_customer_owned).trim().toLowerCase();
                               
-                              // Sink and Tap Logic
                               if (k === 'sink_details' || k === 'tap_details') {
                                 if (sinkTapOwned === 'yes') {
-                                  return <Row key={k} label={humanizeLabel(k)} value="Customer Owned" />;
+                                  return <Row key={k} label={humanizeLabel(k)} value="Customer Owned" name={k} />;
                                 } else if (String(rawData[k]).trim().toLowerCase() === 'no') {
-                                  return <Row key={k} label={humanizeLabel(k)} value="No" />;
+                                  return <Row key={k} label={humanizeLabel(k)} value="No" name={k} />;
                                 }
-                                // Fall through to default rendering if it contains a value other than 'yes'/'no' or is empty/null
-                                return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                                return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                               }
                               
-                              // Check the appliances owned status
                               const appliancesOwned = String(rawData.appliances_customer_owned).trim().toLowerCase();
                               
-                              // Other Appliances / Appliances Logic
                               if (k === 'other_appliances' || k === 'appliances') {
                                 if (appliancesOwned === 'yes') {
-                                  return <Row key={k} label={humanizeLabel(k)} value="Customer Owned" />;
+                                  return <Row key={k} label={humanizeLabel(k)} value="Customer Owned" name={k} />;
                                 } else if (rawData[k] && Array.isArray(rawData[k])) {
-                                   // Logic to flatten appliance array for display if 'no' or value is provided
-                                   const appliancesList = rawData[k]
-                                     .filter((app: any) => app.details || app.order_date)
-                                     .map((app: any) => {
-                                       const details = app.details || 'N/A';
-                                       const orderDate = app.order_date ? ` (Order Date: ${formatDate(app.order_date)})` : '';
-                                       return `${details}${orderDate}`;
-                                     })
-                                     .join(', ');
-                                  return <Row key={k} label={humanizeLabel(k)} value={appliancesList || '—'} />;
+                                  const appliancesList = rawData[k]
+                                    .filter((app: any) => app.details || app.order_date)
+                                    .map((app: any) => {
+                                      const details = app.details || 'N/A';
+                                      const orderDate = app.order_date ? ` (Order Date: ${formatDate(app.order_date)})` : '';
+                                      return `${details}${orderDate}`;
+                                    })
+                                    .join(', ');
+                                  return <Row key={k} label={humanizeLabel(k)} value={appliancesList || '—'} name={k} />;
                                 }
                                 
-                                // Show raw value if it's a string (for 'other_appliances') or dash
-                                return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                                return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                               }
                               
-                              return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                              return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                             })}
                         </div>
                       </section>
@@ -1096,7 +1361,7 @@ export default function CustomerDetailsPage() {
                           .filter(k => keys.includes(k) && (k !== "appliance_promotion_info" || inferredType === "kitchen"))
                           .map(k => {
                             displayed.add(k);
-                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                           })}
                       </div>
                     </section>
@@ -1122,22 +1387,21 @@ export default function CustomerDetailsPage() {
                                 </div>
                               );
                             }
-                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                            return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                           })}
                       </div>
                     </section>
 
-                    {keys.filter(k => !displayed.has(k) && !auxiliaryFields.includes(k)).length > 0 && (
+                    {keys.filter(k => !displayed.has(k) && !auxiliaryFields.includes(k) && !dateFields.includes(k)).length > 0 && (
                       <section>
                         <h3 className="text-md font-semibold mb-3 text-gray-900">Additional Information</h3>
                         <div className="bg-white rounded-lg p-4 shadow-sm">
                           {keys
                             .filter(k => {
-                              // Filter out fields already displayed, including auxiliary ones
                               const allSpecificFields = [
                                 ...customerInfoFields, ...designFields, ...termsFields, 
                                 ...signatureFields, ...bedroomFields, ...kitchenFields, 
-                                ...auxiliaryFields
+                                ...auxiliaryFields, ...dateFields
                               ];
 
                               if (allSpecificFields.includes(k) || displayed.has(k)) return false;
@@ -1146,7 +1410,7 @@ export default function CustomerDetailsPage() {
                             })
                             .map(k => {
                               displayed.add(k);
-                              return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} />;
+                              return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                             })}
                         </div>
                       </section>

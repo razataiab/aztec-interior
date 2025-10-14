@@ -14,12 +14,8 @@ const FIELD_LABELS: Record<string, string> = {
   first_name: "First Name",
   last_name: "Last Name",
   email: "Email",
-  phone: "Phone",
-  address: "Address",
-  postcode: "Postcode",
   kitchen_size: "Kitchen Size",
   bedroom_count: "Number of Bedrooms",
-  notes: "Notes",
 };
 
 type ProjectType = 'Bedroom' | 'Kitchen' | 'Other';
@@ -50,12 +46,44 @@ export default function CustomerEditPage() {
   useEffect(() => {
     if (!id) return;
     setLoading(true);
+    
     fetch(`http://127.0.0.1:5000/customers/${id}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch customer");
         return res.json();
       })
       .then((data) => {
+        // --- RECEIPT CHECK LOGIC ---
+        const receiptSubmission = data.form_submissions?.find((sub: any) => {
+          const submissionData = typeof sub.form_data === "string" ? JSON.parse(sub.form_data || "{}") : sub.form_data || {};
+          // Check if this is a receipt submission
+          return submissionData['Is Receipt'] === "true" || 
+                 submissionData['Form Type'] === "Receipt Receipt" ||
+                 submissionData['Receipt Type'] !== undefined;
+        });
+
+        if (receiptSubmission) {
+          // Load the form data from the submission
+          const receiptData = typeof receiptSubmission.form_data === "string" 
+            ? JSON.parse(receiptSubmission.form_data || "{}") 
+            : receiptSubmission.form_data || {};
+
+          // Map the data fields to URL parameters for the ReceiptPage
+          const query = new URLSearchParams({
+            customerId: id as string,
+            customerName: receiptData['Customer Name'] || data.name || 'N/A',
+            customerAddress: receiptData['Customer Address'] || data.address || 'N/A',
+            customerPhone: receiptData['Customer Phone'] || data.phone || 'N/A',
+            type: receiptData['Receipt Type']?.toLowerCase() || 'receipt',
+          }).toString();
+
+          // Redirect to the receipt page
+          router.replace(`/dashboard/receipts?${query}`);
+          return;
+        }
+        // --- END RECEIPT CHECK LOGIC ---
+
+        // If not a receipt, continue with customer edit form setup
         setCustomer(data);
         const submission = Array.isArray(data.form_submissions) && data.form_submissions.length > 0 
           ? data.form_submissions[0] 
@@ -63,7 +91,28 @@ export default function CustomerEditPage() {
         const parsedFormData = typeof submission.form_data === "string"
           ? JSON.parse(submission.form_data || "{}")
           : submission.form_data || {};
-        setFormData(parsedFormData);
+        
+        // Filter out receipt-specific fields and unwanted sections
+        const filteredFormData: any = {};
+        Object.entries(parsedFormData).forEach(([key, value]) => {
+          // Exclude receipt fields and section headers
+          if (!key.includes('Receipt') && 
+              !key.includes('Customer Information') &&
+              !key.includes('Design Specifications') &&
+              !key.includes('Terms & Information') &&
+              !key.includes('Customer Signature') &&
+              key !== 'Is Receipt' &&
+              key !== 'Form Type' &&
+              key !== 'Payment Method' &&
+              key !== 'Payment Description' &&
+              key !== 'Paid Amount' &&
+              key !== 'Total Paid To Date' &&
+              key !== 'Balance To Pay') {
+            filteredFormData[key] = value;
+          }
+        });
+        
+        setFormData(filteredFormData);
         
         // If customer already has an address, show manual input
         if (data.address) {
@@ -72,7 +121,7 @@ export default function CustomerEditPage() {
       })
       .catch((err) => console.error("Error loading customer:", err))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, router]);
 
   const handleCustomerChange = (field: string, value: string) => {
     setCustomer((prev: any) => ({ ...prev, [field]: value }));
@@ -111,18 +160,15 @@ export default function CustomerEditPage() {
     setShowManualAddress(false);
 
     try {
-      const apiKey = process.env.NEXT_PUBLIC_GETADDRESS_API_KEY; // Your API key
-      // Use autocomplete endpoint with postcode filter
+      const apiKey = process.env.NEXT_PUBLIC_GETADDRESS_API_KEY;
       const response = await fetch(
         `https://api.getaddress.io/autocomplete/${encodeURIComponent(customer.postcode)}?api-key=${apiKey}&all=true`
       );
 
       if (response.ok) {
         const data = await response.json();
-        console.log("API Response:", data); // Debug log
         
         if (data.suggestions && data.suggestions.length > 0) {
-          // Fetch full address details for each suggestion
           const addressPromises = data.suggestions.map((suggestion: any) =>
             fetch(`https://api.getaddress.io/get/${suggestion.id}?api-key=${apiKey}`)
               .then(res => res.json())
@@ -146,16 +192,12 @@ export default function CustomerEditPage() {
           }));
           
           setAddresses(formattedAddresses);
-          console.log("Formatted addresses:", formattedAddresses); // Debug log
         } else {
-          // No addresses found - show manual entry with warning
-          console.log("No addresses in response"); // Debug log
           setShowManualAddress(true);
         }
       } else {
-        // API error - show manual entry with warning
         const errorText = await response.text();
-        console.error("API Error:", response.status, response.statusText, errorText); // Debug log
+        console.error("API Error:", response.status, response.statusText, errorText); 
         
         if (response.status === 404) {
           alert("API Key Error: The getAddress.io API key appears to be invalid. Please check your API key configuration.");
@@ -364,9 +406,11 @@ export default function CustomerEditPage() {
 
           {showManualAddress && (
             <div className="flex flex-col mt-6">
-              <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded mb-3">
-                No addresses found for this postcode. Please enter your address manually.
-              </div>
+              {addresses.length === 0 && (
+                <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded mb-3">
+                  No addresses found for this postcode. Please enter your address manually.
+                </div>
+              )}
               <Label className="text-sm text-gray-500 font-medium mb-1">
                 Address <span className="text-red-500">*</span>
               </Label>
@@ -488,31 +532,28 @@ export default function CustomerEditPage() {
           </div>
         </div>
 
-        <div className="border-t border-gray-200 pt-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Additional Information</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
-            {Object.entries(FIELD_LABELS).map(([key, label]) => {
-              if (key === 'phone' || key === 'address' || key === 'postcode') return null;
-              
-              return (
-                <div key={key} className="flex flex-col">
-                  <Label className="text-sm text-gray-500 font-medium mb-1">{label}</Label>
-                  {key === "notes" ? (
-                    <Textarea
-                      value={formData[key] || ""}
-                      onChange={(e) => handleFormDataChange(key, e.target.value)}
-                    />
-                  ) : (
+        {/* Only show Additional Information if there are valid fields */}
+        {Object.keys(formData).length > 0 && (
+          <div className="border-t border-gray-200 pt-8">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">Additional Information</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+              {Object.entries(FIELD_LABELS).map(([key, label]) => {
+                // Skip if not in formData
+                if (!formData.hasOwnProperty(key)) return null;
+                
+                return (
+                  <div key={key} className="flex flex-col">
+                    <Label className="text-sm text-gray-500 font-medium mb-1">{label}</Label>
                     <Input
                       value={formData[key] || ""}
                       onChange={(e) => handleFormDataChange(key, e.target.value)}
                     />
-                  )}
-                </div>
-              );
-            })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="mt-8 pt-8 border-t border-gray-200 flex justify-end space-x-2">
           <Button onClick={handleCancel} variant="outline">
