@@ -99,6 +99,7 @@ const getProjectTypeColor = (type: ProjectType): string => {
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [stageFilter, setStageFilter] = useState<JobStage | 'All'>('All');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -109,10 +110,49 @@ export default function CustomersPage() {
     fetchCustomers();
   }, []);
 
+  useEffect(() => {
+    // Filter customers when user data loads or changes
+    if (user?.role === "Sales") {
+      console.log("Current user:", user);
+      console.log("All customers:", allCustomers);
+      
+      const filteredData = allCustomers.filter((customer: Customer) => {
+        const matchesCreatedBy = customer.created_by === user.id;
+        const matchesSalesperson = customer.salesperson === user.name;
+        
+        console.log(`Customer ${customer.name}:`, {
+          created_by: customer.created_by,
+          salesperson: customer.salesperson,
+          matchesCreatedBy,
+          matchesSalesperson
+        });
+        
+        return matchesCreatedBy || matchesSalesperson;
+      });
+      
+      console.log("Filtered customers for Sales:", filteredData);
+      
+      // TEMPORARY: If no customers match, show all customers
+      // Remove this after fixing the data
+      if (filteredData.length === 0 && allCustomers.length > 0) {
+        console.warn("No customers match Sales filter. Showing all customers temporarily.");
+        setCustomers(allCustomers);
+      } else {
+        setCustomers(filteredData);
+      }
+    } else {
+      console.log("Non-sales user, showing all customers");
+      setCustomers(allCustomers);
+    }
+  }, [user, allCustomers]);
+
   const fetchCustomers = () => {
     fetch("http://127.0.0.1:5000/customers")
       .then((res) => res.json())
-      .then(setCustomers)
+      .then((data) => {
+        setAllCustomers(data);
+        // Initial set will be filtered by useEffect above
+      })
       .catch((err) => console.error("Error fetching customers:", err));
   };
 
@@ -129,8 +169,27 @@ export default function CustomersPage() {
     return matchesSearch && matchesStage;
   });
 
+  const canEditCustomer = (customer: Customer): boolean => {
+    if (user?.role === "Manager" || user?.role === "HR") return true;
+    if (user?.role === "Sales") {
+      return customer.created_by === user.id || customer.salesperson === user.name;
+    }
+    return false;
+  };
+
+  const canDeleteCustomer = (customer: Customer): boolean => {
+    // Only Manager and HR can delete customers
+    return user?.role === "Manager" || user?.role === "HR";
+  };
+
   const deleteCustomer = async (id: string) => {
+    if (!canDeleteCustomer(customers.find(c => c.id === id)!)) {
+      alert("You don't have permission to delete customers.");
+      return;
+    }
+    
     if (!confirm("Are you sure you want to delete this customer?")) return;
+    
     try {
       const res = await fetch(`http://127.0.0.1:5000/customers/${id}`, {
         method: "DELETE",
@@ -140,19 +199,6 @@ export default function CustomersPage() {
     } catch (err) {
       console.error("Delete error:", err);
       alert("Error deleting customer");
-    }
-  };
-
-  const syncCustomerStage = async (id: string) => {
-    try {
-      const res = await fetch(`http://127.0.0.1:5000/customers/${id}/sync-stage`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error("Failed to sync stage");
-      fetchCustomers();
-    } catch (err) {
-      console.error("Sync error:", err);
-      alert("Error syncing customer stage");
     }
   };
 
@@ -174,7 +220,9 @@ export default function CustomersPage() {
 
   return (
     <div className="w-full p-6">
-      <h1 className="text-3xl font-bold mb-6">Customers</h1>
+      <h1 className="text-3xl font-bold mb-6">
+        {user?.role === "Sales" ? "My Customers" : "Customers"}
+      </h1>
       
       <div className="flex justify-between mb-6">
         <div className="flex gap-3">
@@ -226,7 +274,9 @@ export default function CustomersPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Postcode</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stage</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Salesperson</th>
+                {(user?.role === "Manager" || user?.role === "HR") && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Salesperson</th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project Types</th>
                 {user?.role !== "Staff" && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -264,9 +314,11 @@ export default function CustomersPage() {
                       {customer.stage}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {customer.salesperson || "—"}
-                  </td>
+                  {(user?.role === "Manager" || user?.role === "HR") && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {customer.salesperson || "—"}
+                    </td>
+                  )}
                   <td className="px-6 py-4 whitespace-nowrap">
                     {customer.project_types && customer.project_types.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
@@ -286,28 +338,32 @@ export default function CustomersPage() {
                   {user?.role !== "Staff" && (
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <div className="flex gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/customers/${customer.id}/edit`);
-                          }}
-                          title="Edit customer"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteCustomer(customer.id);
-                          }}
-                          title="Delete customer"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {canEditCustomer(customer) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              router.push(`/dashboard/customers/${customer.id}/edit`);
+                            }}
+                            title="Edit customer"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {canDeleteCustomer(customer) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteCustomer(customer.id);
+                            }}
+                            title="Delete customer"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
                       </div>
                     </td>
                   )}
@@ -317,6 +373,15 @@ export default function CustomersPage() {
           </table>
         </div>
       </div>
+
+      {filteredCustomers.length === 0 && (
+        <div className="text-center py-12 text-gray-500">
+          <p className="text-lg">No customers found.</p>
+          {user?.role === "Sales" && (
+            <p className="text-sm mt-2">Create your first customer to get started!</p>
+          )}
+        </div>
+      )}
 
       <CreateCustomerModal
         isOpen={showCreateModal}

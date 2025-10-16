@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Save, Search } from "lucide-react";
+import { ArrowLeft, Save, Search, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useAuth } from "@/contexts/AuthContext";
 
 const FIELD_LABELS: Record<string, string> = {
   first_name: "First Name",
@@ -29,9 +30,15 @@ interface Address {
   formatted_address: string;
 }
 
+// Sales role can only update customer through Quoted stage
+const SALES_ALLOWED_STAGES = [
+  'Lead', 'Quote', 'Consultation', 'Survey', 'Measure', 'Design', 'Quoted'
+];
+
 export default function CustomerEditPage() {
   const params = useParams();
   const router = useRouter();
+  const { user } = useAuth();
   const id = params?.id;
   const [customer, setCustomer] = useState<any | null>(null);
   const [formData, setFormData] = useState<any>({});
@@ -42,6 +49,7 @@ export default function CustomerEditPage() {
   const [loadingAddresses, setLoadingAddresses] = useState(false);
   const [showManualAddress, setShowManualAddress] = useState(false);
   const [selectedAddressIndex, setSelectedAddressIndex] = useState<string>("");
+  const [hasAccess, setHasAccess] = useState(true);
 
   useEffect(() => {
     if (!id) return;
@@ -53,22 +61,29 @@ export default function CustomerEditPage() {
         return res.json();
       })
       .then((data) => {
-        // --- RECEIPT CHECK LOGIC ---
+        // Check if user has permission to edit this customer
+        if (user?.role === "Sales") {
+          const hasPermission = data.created_by === user.id || data.salesperson === user.name;
+          setHasAccess(hasPermission);
+          if (!hasPermission) {
+            setLoading(false);
+            return;
+          }
+        }
+
+        // Check for receipt submission redirect
         const receiptSubmission = data.form_submissions?.find((sub: any) => {
           const submissionData = typeof sub.form_data === "string" ? JSON.parse(sub.form_data || "{}") : sub.form_data || {};
-          // Check if this is a receipt submission
           return submissionData['Is Receipt'] === "true" || 
                  submissionData['Form Type'] === "Receipt Receipt" ||
                  submissionData['Receipt Type'] !== undefined;
         });
 
         if (receiptSubmission) {
-          // Load the form data from the submission
           const receiptData = typeof receiptSubmission.form_data === "string" 
             ? JSON.parse(receiptSubmission.form_data || "{}") 
             : receiptSubmission.form_data || {};
 
-          // Map the data fields to URL parameters for the ReceiptPage
           const query = new URLSearchParams({
             customerId: id as string,
             customerName: receiptData['Customer Name'] || data.name || 'N/A',
@@ -77,13 +92,10 @@ export default function CustomerEditPage() {
             type: receiptData['Receipt Type']?.toLowerCase() || 'receipt',
           }).toString();
 
-          // Redirect to the receipt page
           router.replace(`/dashboard/receipts?${query}`);
           return;
         }
-        // --- END RECEIPT CHECK LOGIC ---
 
-        // If not a receipt, continue with customer edit form setup
         setCustomer(data);
         const submission = Array.isArray(data.form_submissions) && data.form_submissions.length > 0 
           ? data.form_submissions[0] 
@@ -92,10 +104,9 @@ export default function CustomerEditPage() {
           ? JSON.parse(submission.form_data || "{}")
           : submission.form_data || {};
         
-        // Filter out receipt-specific fields and unwanted sections
+        // Filter out receipt-specific fields
         const filteredFormData: any = {};
         Object.entries(parsedFormData).forEach(([key, value]) => {
-          // Exclude receipt fields and section headers
           if (!key.includes('Receipt') && 
               !key.includes('Customer Information') &&
               !key.includes('Design Specifications') &&
@@ -114,14 +125,13 @@ export default function CustomerEditPage() {
         
         setFormData(filteredFormData);
         
-        // If customer already has an address, show manual input
         if (data.address) {
           setShowManualAddress(true);
         }
       })
       .catch((err) => console.error("Error loading customer:", err))
       .finally(() => setLoading(false));
-  }, [id, router]);
+  }, [id, router, user]);
 
   const handleCustomerChange = (field: string, value: string) => {
     setCustomer((prev: any) => ({ ...prev, [field]: value }));
@@ -282,8 +292,50 @@ export default function CustomerEditPage() {
     router.push(`/dashboard/customers/${id}`);
   };
 
+  const getAvailableStages = () => {
+    if (user?.role === "Sales") {
+      return SALES_ALLOWED_STAGES;
+    }
+    return [
+      'Lead', 'Quote', 'Consultation', 'Survey', 'Measure', 'Design', 'Quoted',
+      'Accepted', 'OnHold', 'Production', 'Delivery', 'Installation', 'Complete',
+      'Remedial', 'Cancelled'
+    ];
+  };
+
   if (loading) return <div className="p-8">Loading...</div>;
+  
+  if (!hasAccess) {
+    return (
+      <div className="min-h-screen bg-white">
+        <div className="border-b border-gray-200 bg-white px-8 py-6">
+          <div className="flex items-center space-x-2">
+            <div
+              onClick={() => router.push("/dashboard/customers")}
+              className="flex items-center text-gray-500 hover:text-gray-700 cursor-pointer"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </div>
+            <h1 className="text-3xl font-semibold text-gray-900">Access Denied</h1>
+          </div>
+        </div>
+        <div className="px-8 py-12 text-center">
+          <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">No Access</h2>
+          <p className="text-gray-600 mb-6">
+            You don't have permission to edit this customer's details.
+          </p>
+          <Button onClick={() => router.push("/dashboard/customers")}>
+            Return to Customers
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  
   if (!customer) return <div className="p-8">Customer not found.</div>;
+
+  const availableStages = getAvailableStages();
 
   return (
     <div className="min-h-screen bg-white">
@@ -300,6 +352,21 @@ export default function CustomerEditPage() {
       </div>
 
       <div className="px-8 py-6">
+        {user?.role === "Sales" && (
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-start space-x-2">
+              <AlertCircle className="h-5 w-5 text-blue-600 mt-0.5" />
+              <div>
+                <p className="text-sm text-blue-800 font-medium">Sales User Permissions</p>
+                <p className="text-sm text-blue-700 mt-1">
+                  You can edit customer details and update stages up to "Quoted". 
+                  For production stages and beyond, please contact your manager.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mb-8">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">Contact Information</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
@@ -445,7 +512,12 @@ export default function CustomerEditPage() {
             </div>
 
             <div className="flex flex-col">
-              <Label className="text-sm text-gray-500 font-medium mb-1">Stage</Label>
+              <Label className="text-sm text-gray-500 font-medium mb-1">
+                Stage
+                {user?.role === "Sales" && (
+                  <span className="text-xs text-gray-500 ml-2">(Up to Quoted)</span>
+                )}
+              </Label>
               <Select
                 value={customer.status || "Lead"}
                 onValueChange={(value) => handleCustomerChange("status", value)}
@@ -454,21 +526,11 @@ export default function CustomerEditPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Lead">Lead</SelectItem>
-                  <SelectItem value="Quote">Quote</SelectItem>
-                  <SelectItem value="Consultation">Consultation</SelectItem>
-                  <SelectItem value="Survey">Survey</SelectItem>
-                  <SelectItem value="Measure">Measure</SelectItem>
-                  <SelectItem value="Design">Design</SelectItem>
-                  <SelectItem value="Quoted">Quoted</SelectItem>
-                  <SelectItem value="Accepted">Accepted</SelectItem>
-                  <SelectItem value="OnHold">On Hold</SelectItem>
-                  <SelectItem value="Production">Production</SelectItem>
-                  <SelectItem value="Delivery">Delivery</SelectItem>
-                  <SelectItem value="Installation">Installation</SelectItem>
-                  <SelectItem value="Complete">Complete</SelectItem>
-                  <SelectItem value="Remedial">Remedial</SelectItem>
-                  <SelectItem value="Cancelled">Cancelled</SelectItem>
+                  {availableStages.map((stage) => (
+                    <SelectItem key={stage} value={stage}>
+                      {stage}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -532,13 +594,11 @@ export default function CustomerEditPage() {
           </div>
         </div>
 
-        {/* Only show Additional Information if there are valid fields */}
         {Object.keys(formData).length > 0 && (
           <div className="border-t border-gray-200 pt-8">
             <h2 className="text-xl font-semibold text-gray-900 mb-4">Additional Information</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
               {Object.entries(FIELD_LABELS).map(([key, label]) => {
-                // Skip if not in formData
                 if (!formData.hasOwnProperty(key)) return null;
                 
                 return (

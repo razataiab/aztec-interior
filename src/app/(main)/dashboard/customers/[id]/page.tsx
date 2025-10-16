@@ -23,7 +23,6 @@ import {
   ChevronDown,
   Briefcase,
   CheckSquare,
-  Link,
   Copy,
   Check,
   Phone,
@@ -34,9 +33,10 @@ import {
   Plus,
   Receipt,
   DollarSign,
-  X,
   Trash2,
+  AlertCircle,
 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Customer {
   id: string;
@@ -55,6 +55,7 @@ interface Customer {
   updated_at: string;
   created_by: string;
   updated_by: string;
+  salesperson?: string;
   form_submissions: FormSubmission[];
   project_types?: string[];
 }
@@ -154,6 +155,7 @@ const formatDate = (dateString: string) => {
 export default function CustomerDetailsPage() {
   const params = useParams();
   const router = useRouter();
+  const { user } = useAuth();
   const id = params?.id as string;
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [quotations, setQuotations] = useState<any[]>([]);
@@ -169,11 +171,12 @@ export default function CustomerDetailsPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [formToDelete, setFormToDelete] = useState<FormSubmission | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [hasAccess, setHasAccess] = useState(true);
 
   useEffect(() => {
     if (!id) return;
     loadCustomerData();
-  }, [id]);
+  }, [id, user]);
 
   const loadCustomerData = () => {
     setLoading(true);
@@ -183,7 +186,27 @@ export default function CustomerDetailsPage() {
         if (!res.ok) throw new Error("Failed to fetch customer");
         return res.json();
       })
-      .then((data) => setCustomer(data))
+      .then((data) => {
+        // --- START MODIFICATION 1/2: Sales can view customer data ---
+        if (user?.role === "Sales" && data.created_by !== user.id && data.salesperson !== user.name) {
+          // If the user is Sales, they can view ANY customer (set hasAccess to true), 
+          // but their edit/creation rights will be limited by the canEdit function below.
+          setHasAccess(true); 
+        } else if (user?.role === "Staff") {
+          // Staff role only gets access to their assigned customer/created customer.
+          const hasPermission = data.created_by === user.id || data.salesperson === user.name;
+          setHasAccess(hasPermission);
+          if (!hasPermission) {
+            setLoading(false);
+            return;
+          }
+        } else {
+            setHasAccess(true); // Manager/HR/Other roles have full access
+        }
+        // --- END MODIFICATION 1/2 ---
+        
+        setCustomer(data);
+      })
       .catch((err) => console.error("Error loading customer:", err));
 
     fetch(`http://127.0.0.1:5000/quotations?customer_id=${id}`)
@@ -199,13 +222,42 @@ export default function CustomerDetailsPage() {
         if (!res.ok) throw new Error("Failed to fetch jobs");
         return res.json();
       })
-      .then((data) => setJobs(data))
+      .then((data) => {
+        // Filter jobs based on role - Sales can only see jobs up to Quoted stage
+        if (user?.role === "Sales") {
+          const salesStages = ['Lead', 'Quote', 'Consultation', 'Survey', 'Measure', 'Design', 'Quoted'];
+          const filteredJobs = data.filter((job: any) => salesStages.includes(job.stage));
+          setJobs(filteredJobs);
+        } else {
+          setJobs(data);
+        }
+      })
       .catch((err) => console.error("Error loading jobs:", err))
       .finally(() => setLoading(false));
   };
 
+  const canEdit = (): boolean => {
+    if (!customer) return false;
+    if (user?.role === "Manager" || user?.role === "HR") return true;
+    if (user?.role === "Sales") {
+      // Sales can ONLY edit/create if they own the customer or are the salesperson
+      return customer.created_by === user.id || customer.salesperson === user.name;
+    }
+    return false;
+  };
+
+  const canDelete = (): boolean => {
+    // Only Manager and HR can delete
+    return user?.role === "Manager" || user?.role === "HR";
+  };
+
+  const canCreateFinancialDocs = (): boolean => {
+    // Sales can create receipts/invoices but they need approval
+    return user?.role !== "Staff";
+  };
+
   const generateFormLink = async (type: "bedroom" | "kitchen") => {
-    if (generating) return;
+    if (generating || !canEdit()) return;
 
     setGenerating(true);
     try {
@@ -250,8 +302,166 @@ export default function CustomerDetailsPage() {
     }
   };
 
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(generatedLink);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  };
+
+  const handleEdit = () => {
+    if (!canEdit()) {
+      alert("You don't have permission to edit this customer.");
+      return;
+    }
+    router.push(`/dashboard/customers/${id}/edit`);
+  };
+
+  const handleCreateQuote = () => {
+    if (!canEdit()) {
+      alert("You don't have permission to create quotes for this customer.");
+      return;
+    }
+    const queryParams = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      customerEmail: customer?.email || "",
+    });
+    router.push(`/dashboard/quotes/create?${queryParams.toString()}`);
+  };
+
+  const handleCreateJob = () => {
+    if (user?.role === "Sales") {
+      alert("Sales users cannot directly create jobs. Jobs are created from accepted quotes.");
+      return;
+    }
+    const queryParams = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      customerEmail: customer?.email || "",
+    });
+    router.push(`/dashboard/jobs/create?${queryParams.toString()}`);
+  };
+
+  const handleCreateChecklist = () => {
+    if (!canEdit()) {
+      alert("You don't have permission to create checklists for this customer.");
+      return;
+    }
+    router.push(`/dashboard/checklists/create?customerId=${id}`);
+  };
+
+  const buildCustomerQuery = () => {
+    const qp = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      customerEmail: customer?.email || "",
+    });
+    return qp.toString();
+  };
+
+  const handleCreateRemedialChecklist = () => {
+    if (user?.role === "Sales") {
+      alert("Sales users cannot create remedial checklists. Please contact your manager.");
+      return;
+    }
+    router.push(`/dashboard/checklists/remedial?${buildCustomerQuery()}`);
+  };
+
+  const handleCreateReceipt = () => {
+    if (!canCreateFinancialDocs()) {
+      alert("You don't have permission to create receipts.");
+      return;
+    }
+    const params = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      type: "receipt",
+      paidAmount: "0.00",
+      totalPaidToDate: "0.00",
+      balanceToPay: "0.00",
+      receiptDate: new Date().toISOString().split('T')[0],
+      paymentMethod: "BACS",
+      paymentDescription: "Payment received for your Kitchen/Bedroom Cabinetry.",
+    });
+    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
+  };
+
+  const handleCreateDepositReceipt = () => {
+    if (!canCreateFinancialDocs()) {
+      alert("You don't have permission to create receipts.");
+      return;
+    }
+    const params = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      type: "deposit",
+      paidAmount: "0.00",
+      totalPaidToDate: "0.00",
+      balanceToPay: "0.00",
+      receiptDate: new Date().toISOString().split('T')[0],
+      paymentMethod: "BACS",
+      paymentDescription: "Deposit payment received for your Kitchen/Bedroom Cabinetry.",
+    });
+    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
+  };
+
+  const handleCreateFinalReceipt = () => {
+    if (!canCreateFinancialDocs()) {
+      alert("You don't have permission to create receipts.");
+      return;
+    }
+    const params = new URLSearchParams({
+      customerId: String(id),
+      customerName: customer?.name || "",
+      customerAddress: customer?.address || "",
+      customerPhone: customer?.phone || "",
+      type: "final",
+      paidAmount: "0.00",
+      totalPaidToDate: "0.00",
+      balanceToPay: "0.00",
+      receiptDate: new Date().toISOString().split('T')[0],
+      paymentMethod: "BACS",
+      paymentDescription: "Final payment received for your Kitchen/Bedroom Cabinetry.",
+    });
+    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
+  };
+
+  const handleCreateInvoice = () => {
+    if (!canCreateFinancialDocs()) {
+      alert("You don't have permission to create invoices.");
+      return;
+    }
+    router.push(`/dashboard/invoices/create?${buildCustomerQuery()}`);
+  };
+
+  const handleCreateProformaInvoice = () => {
+    if (!canCreateFinancialDocs()) {
+      alert("You don't have permission to create invoices.");
+      return;
+    }
+    router.push(`/dashboard/invoices/create?type=proforma&${buildCustomerQuery()}`);
+  };
+
+  const handleCreatePaymentTerms = () => {
+    if (!canCreateFinancialDocs()) {
+      alert("You don't have permission to create payment terms.");
+      return;
+    }
+    router.push(`/dashboard/payment-terms/create?${buildCustomerQuery()}`);
+  };
+
   const handleCreateKitchenChecklist = async () => {
-    if (generating) return;
+    if (generating || !canEdit()) return;
 
     setGenerating(true);
     try {
@@ -276,6 +486,7 @@ export default function CustomerDetailsPage() {
             customerAddress: customer?.address || "",
             customerPhone: customer?.phone || "",
           });
+          // Redirect to the form route with the token
           router.push(`/form/${data.token}?${params.toString()}`);
         } else {
           alert(`Failed to generate kitchen form: ${data.error}`);
@@ -293,7 +504,7 @@ export default function CustomerDetailsPage() {
   };
 
   const handleCreateBedroomChecklist = async () => {
-    if (generating) return;
+    if (generating || !canEdit()) return;
 
     setGenerating(true);
     try {
@@ -318,6 +529,7 @@ export default function CustomerDetailsPage() {
             customerAddress: customer?.address || "",
             customerPhone: customer?.phone || "",
           });
+          // Redirect to the form route with the token
           router.push(`/form/${data.token}?${params.toString()}`);
         } else {
           alert(`Failed to generate bedroom form: ${data.error}`);
@@ -332,148 +544,6 @@ export default function CustomerDetailsPage() {
     } finally {
       setGenerating(false);
     }
-  };
-
-  const handleDeleteForm = async () => {
-    if (!formToDelete) return;
-    
-    setIsDeleting(true);
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:5000/form-submissions/${formToDelete.id}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      if (response.ok) {
-        loadCustomerData();
-        setShowDeleteDialog(false);
-        setFormToDelete(null);
-      } else {
-        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
-        alert(`Failed to delete form: ${errorData.error || "Unknown error"}`);
-      }
-    } catch (error) {
-      console.error("Error deleting form:", error);
-      alert("Network error: Could not delete form");
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(generatedLink);
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2000);
-  };
-
-  const handleEdit = () => {
-    router.push(`/dashboard/customers/${id}/edit`);
-  };
-
-  const handleCreateQuote = () => {
-    const queryParams = new URLSearchParams({
-      customerId: String(id),
-      customerName: customer?.name || "",
-      customerAddress: customer?.address || "",
-      customerPhone: customer?.phone || "",
-      customerEmail: customer?.email || "",
-    });
-    router.push(`/dashboard/quotes/create?${queryParams.toString()}`);
-  };
-
-  const handleCreateJob = () => {
-    const queryParams = new URLSearchParams({
-      customerId: String(id),
-      customerName: customer?.name || "",
-      customerAddress: customer?.address || "",
-      customerPhone: customer?.phone || "",
-      customerEmail: customer?.email || "",
-    });
-    router.push(`/dashboard/jobs/create?${queryParams.toString()}`);
-  };
-
-  const handleCreateChecklist = () => {
-    router.push(`/dashboard/checklists/create?customerId=${id}`);
-  };
-
-  const buildCustomerQuery = () => {
-    const qp = new URLSearchParams({
-      customerId: String(id),
-      customerName: customer?.name || "",
-      customerAddress: customer?.address || "",
-      customerPhone: customer?.phone || "",
-      customerEmail: customer?.email || "",
-    });
-    return qp.toString();
-  };
-
-  const handleCreateRemedialChecklist = () => {
-    router.push(`/dashboard/checklists/remedial?${buildCustomerQuery()}`);
-  };
-
-  const handleCreateReceipt = () => {
-    const params = new URLSearchParams({
-      customerId: String(id),
-      customerName: customer?.name || "",
-      customerAddress: customer?.address || "",
-      customerPhone: customer?.phone || "",
-      type: "receipt",
-      paidAmount: "0.00",
-      totalPaidToDate: "0.00",
-      balanceToPay: "0.00",
-      receiptDate: new Date().toISOString().split('T')[0],
-      paymentMethod: "BACS",
-      paymentDescription: "Payment received for your Kitchen/Bedroom Cabinetry.",
-    });
-    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
-  };
-
-  const handleCreateDepositReceipt = () => {
-    const params = new URLSearchParams({
-      customerId: String(id),
-      customerName: customer?.name || "",
-      customerAddress: customer?.address || "",
-      customerPhone: customer?.phone || "",
-      type: "deposit",
-      paidAmount: "0.00",
-      totalPaidToDate: "0.00",
-      balanceToPay: "0.00",
-      receiptDate: new Date().toISOString().split('T')[0],
-      paymentMethod: "BACS",
-      paymentDescription: "Deposit payment received for your Kitchen/Bedroom Cabinetry.",
-    });
-    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
-  };
-
-  const handleCreateFinalReceipt = () => {
-    const params = new URLSearchParams({
-      customerId: String(id),
-      customerName: customer?.name || "",
-      customerAddress: customer?.address || "",
-      customerPhone: customer?.phone || "",
-      type: "final",
-      paidAmount: "0.00",
-      totalPaidToDate: "0.00",
-      balanceToPay: "0.00",
-      receiptDate: new Date().toISOString().split('T')[0],
-      paymentMethod: "BACS",
-      paymentDescription: "Final payment received for your Kitchen/Bedroom Cabinetry.",
-    });
-    router.push(`/dashboard/checklists/receipt?${params.toString()}`);
-  };
-
-  const handleCreateInvoice = () => {
-    router.push(`/dashboard/invoices/create?${buildCustomerQuery()}`);
-  };
-
-  const handleCreateProformaInvoice = () => {
-    router.push(`/dashboard/invoices/create?type=proforma&${buildCustomerQuery()}`);
-  };
-
-  const handleCreatePaymentTerms = () => {
-    router.push(`/dashboard/payment-terms/create?${buildCustomerQuery()}`);
   };
 
   const handleViewQuote = (quoteId: string) => {
@@ -515,9 +585,9 @@ export default function CustomerDetailsPage() {
 
   const humanizeValue = (val: any, key?: string): string => {
     if (val === null || val === undefined || val === "") return "—";
-    
+
     const isFinancial = key && FINANCIAL_FIELDS.includes(key);
-    
+
     if (typeof val === "string") {
       const str = val.trim();
       if (isUUID(str)) return "—";
@@ -533,14 +603,14 @@ export default function CustomerDetailsPage() {
         const floatValue = parseFloat(cleanStr.replace(/[^0-9.-]/g, ''));
         return isFinancial && !isNaN(floatValue) ? `£${floatValue.toFixed(2)}` : cleanStr;
       }
-      
+
       const floatValue = parseFloat(str.replace(/[^0-9.-]/g, ''));
       return isFinancial && !isNaN(floatValue) ? `£${floatValue.toFixed(2)}` : str.charAt(0).toUpperCase() + str.slice(1);
     }
-    
+
     if (typeof val === "number") {
-        const formatted = val.toFixed(2);
-        return isFinancial ? `£${formatted}` : String(val);
+      const formatted = val.toFixed(2);
+      return isFinancial ? `£${formatted}` : String(val);
     }
 
     if (typeof val === "boolean") return String(val);
@@ -561,7 +631,7 @@ export default function CustomerDetailsPage() {
     }
 
     const formType = (formDataRaw?.form_type || "").toString().toLowerCase();
-    
+
     if (formType.includes("receipt") || formType.includes("deposit") || formType.includes("final") || formType.includes("invoice") || formType.includes("proforma") || formType.includes("terms")) {
       return "document";
     }
@@ -573,7 +643,7 @@ export default function CustomerDetailsPage() {
 
     if (formType.includes("bed")) return "bedroom";
     if (formType.includes("kitchen")) return "kitchen";
-    
+
     return "form";
   };
 
@@ -598,9 +668,7 @@ export default function CustomerDetailsPage() {
       case "kitchen":
         return "Kitchen Checklist";
       case "document":
-        // Clean up the form type - remove duplicate words and format properly
         const parts = formTypeRaw.split(/[-_]/);
-        // Remove duplicate consecutive words (case-insensitive)
         const cleanedParts = parts.filter((word, index) => {
           if (index === 0) return true;
           return word.toLowerCase() !== parts[index - 1].toLowerCase();
@@ -623,7 +691,7 @@ export default function CustomerDetailsPage() {
       }
       if (typeof v === "object" && v !== null) {
         if (Object.keys(v).some(key => typeof v[key] !== 'string' && typeof v[key] !== 'number')) {
-             return <pre className="text-sm whitespace-pre-wrap bg-white p-3 rounded">{JSON.stringify(v, null, 2)}</pre>;
+          return <pre className="text-sm whitespace-pre-wrap bg-white p-3 rounded">{JSON.stringify(v, null, 2)}</pre>;
         }
       }
       return <span className="text-sm">{humanizeValue(v, name)}</span>;
@@ -643,7 +711,7 @@ export default function CustomerDetailsPage() {
 
   const renderReceiptData = (formData: Record<string, any>) => {
     console.log("Receipt formData:", formData);
-    
+
     const parseAmount = (value: any) => {
       if (!value) return 0;
       if (typeof value === 'number') return value;
@@ -656,13 +724,13 @@ export default function CustomerDetailsPage() {
     const balanceToPay = parseAmount(formData.balance_to_pay || formData.balanceToPay || formData['Balance To Pay']);
     const amountPaid = parseAmount(formData.paid_amount || formData.amount_paid || formData.amountPaid || formData.paidAmount || formData['Paid Amount']);
     const totalPaidToDate = parseAmount(formData.total_paid_to_date || formData.totalPaidToDate || formData.total_paid || formData['Total Paid To Date']) || amountPaid;
-    
+
     console.log("Parsed values:", { balanceToPay, amountPaid, totalPaidToDate });
 
     const derivedData: Record<string, any> = {
       ...formData,
       balance_to_pay: balanceToPay.toFixed(2),
-      amount_paid: amountPaid.toFixed(2), 
+      amount_paid: amountPaid.toFixed(2),
       total_paid_to_date: totalPaidToDate.toFixed(2),
       payment_description: formData.payment_description || formData.paymentDescription || formData['Payment Description'],
       payment_method: formData.payment_method || formData.paymentMethod || formData['Payment Method'],
@@ -689,7 +757,8 @@ export default function CustomerDetailsPage() {
         paymentMethod: derivedData.payment_method || "BACS",
         paymentDescription: derivedData.payment_description || "Payment received for your Kitchen/Bedroom Cabinetry.",
       });
-      // Updated path to match your folder structure
+      // Logic to view the receipt, possibly by navigating to a receipt form/viewer
+      // This will navigate to the form which will pre-populate the data
       router.push(`/dashboard/checklists/receipt?${params.toString()}`);
     };
 
@@ -738,7 +807,7 @@ export default function CustomerDetailsPage() {
 
   const renderRemedialForm = (formData: any) => {
     const items = formData.items || [];
-    
+
     const customerName = formData.customerName || formData.customer_name || "—";
     const customerPhone = formData.customerPhone || formData.customer_phone || "—";
     const customerAddress = formData.customerAddress || formData.customer_address || "—";
@@ -834,23 +903,83 @@ export default function CustomerDetailsPage() {
           >
             <span>Open</span>
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              setFormToDelete(submission);
-              setShowDeleteDialog(true);
-            }}
-            className="text-red-500 hover:text-red-700 hover:bg-red-50"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {canDelete() && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                setFormToDelete(submission);
+                setShowDeleteDialog(true);
+              }}
+              className="text-red-500 hover:text-red-700 hover:bg-red-50"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
     );
   };
 
+  const handleDeleteForm = async () => {
+    if (!formToDelete || !canDelete()) return;
+
+    setIsDeleting(true);
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:5000/form-submissions/${formToDelete.id}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (response.ok) {
+        loadCustomerData();
+        setShowDeleteDialog(false);
+        setFormToDelete(null);
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+        alert(`Failed to delete form: ${errorData.error || "Unknown error"}`);
+      }
+    } catch (error) {
+      console.error("Error deleting form:", error);
+      alert("Network error: Could not delete form");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+
   if (loading) return <div className="p-8">Loading...</div>;
+
+  if (!hasAccess) {
+    return (
+      <div className="min-h-screen bg-white">
+        <div className="border-b border-gray-200 bg-white px-8 py-6">
+          <div className="flex items-center space-x-2">
+            <div
+              onClick={() => router.push("/dashboard/customers")}
+              className="flex items-center text-gray-500 hover:text-gray-700 cursor-pointer"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </div>
+            <h1 className="text-3xl font-semibold text-gray-900">Access Denied</h1>
+          </div>
+        </div>
+        <div className="px-8 py-12 text-center">
+          <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">No Access</h2>
+          <p className="text-gray-600 mb-6">
+            You don't have permission to view this customer's details.
+          </p>
+          <Button onClick={() => router.push("/dashboard/customers")}>
+            Return to Customers
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   if (!customer) return <div className="p-8">Customer not found.</div>;
 
   return (
@@ -867,64 +996,76 @@ export default function CustomerDetailsPage() {
             <h1 className="text-3xl font-semibold text-gray-900">Customer Details</h1>
           </div>
           <div className="flex items-center space-x-3">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="flex items-center p-2" aria-label="Create">
-                  <Plus className="h-4 w-4" />
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem onClick={handleCreateRemedialChecklist} className="flex items-center space-x-2">
-                  <CheckSquare className="h-4 w-4" />
-                  <span>Remedial Action Checklist</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateChecklist} className="flex items-center space-x-2">
-                  <CheckSquare className="h-4 w-4" />
-                  <span>Checklist</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateQuote} className="flex items-center space-x-2">
-                  <FileText className="h-4 w-4" />
-                  <span>Quotation</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateInvoice} className="flex items-center space-x-2">
-                  <FileText className="h-4 w-4" />
-                  <span>Invoice</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateProformaInvoice} className="flex items-center space-x-2">
-                  <FileText className="h-4 w-4" />
-                  <span>Proforma Invoice</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateReceipt} className="flex items-center space-x-2">
-                  <Receipt className="h-4 w-4" />
-                  <span>Receipt</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateDepositReceipt} className="flex items-center space-x-2">
-                  <Receipt className="h-4 w-4" />
-                  <span>Deposit Receipt</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateFinalReceipt} className="flex items-center space-x-2">
-                  <Receipt className="h-4 w-4" />
-                  <span>Final Receipt</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreatePaymentTerms} className="flex items-center space-x-2">
-                  <DollarSign className="h-4 w-4" />
-                  <span>Payment Terms</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateKitchenChecklist} className="flex items-center space-x-2" disabled={generating}>
-                  <CheckSquare className="h-4 w-4" />
-                  <span>Kitchen Checklist Form</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleCreateBedroomChecklist} className="flex items-center space-x-2" disabled={generating}>
-                  <CheckSquare className="h-4 w-4" />
-                  <span>Bedroom Checklist Form</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button onClick={handleEdit} className="flex items-center space-x-2">
-              <Edit className="h-4 w-4" />
-              <span>Edit</span>
-            </Button>
+            {canEdit() && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="flex items-center p-2" aria-label="Create">
+                    <Plus className="h-4 w-4" />
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  {/* Creation actions visible ONLY if the user canEdit() */}
+                  {user?.role !== "Sales" && ( // Remedial checklist is production/post-sales
+                    <DropdownMenuItem onClick={handleCreateRemedialChecklist} className="flex items-center space-x-2">
+                      <CheckSquare className="h-4 w-4" />
+                      <span>Remedial Action Checklist</span>
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onClick={handleCreateChecklist} className="flex items-center space-x-2">
+                    <CheckSquare className="h-4 w-4" />
+                    <span>Checklist</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleCreateQuote} className="flex items-center space-x-2">
+                    <FileText className="h-4 w-4" />
+                    <span>Quotation</span>
+                  </DropdownMenuItem>
+                  {canCreateFinancialDocs() && (
+                    <>
+                      <DropdownMenuItem onClick={handleCreateInvoice} className="flex items-center space-x-2">
+                        <FileText className="h-4 w-4" />
+                        <span>Invoice</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCreateProformaInvoice} className="flex items-center space-x-2">
+                        <FileText className="h-4 w-4" />
+                        <span>Proforma Invoice</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCreateReceipt} className="flex items-center space-x-2">
+                        <Receipt className="h-4 w-4" />
+                        <span>Receipt</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCreateDepositReceipt} className="flex items-center space-x-2">
+                        <Receipt className="h-4 w-4" />
+                        <span>Deposit Receipt</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCreateFinalReceipt} className="flex items-center space-x-2">
+                        <Receipt className="h-4 w-4" />
+                        <span>Final Receipt</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCreatePaymentTerms} className="flex items-center space-x-2">
+                        <DollarSign className="h-4 w-4" />
+                        <span>Payment Terms</span>
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  <DropdownMenuItem onClick={handleCreateKitchenChecklist} className="flex items-center space-x-2" disabled={generating}>
+                    <CheckSquare className="h-4 w-4" />
+                    <span>Kitchen Checklist Form</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleCreateBedroomChecklist} className="flex items-center space-x-2" disabled={generating}>
+                    <CheckSquare className="h-4 w-4" />
+                    <span>Bedroom Checklist Form</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {canEdit() && (
+              <Button onClick={handleEdit} className="flex items-center space-x-2">
+                <Edit className="h-4 w-4" />
+                <span>Edit</span>
+              </Button>
+            )}
+            {/* Sales roles can view, but EDIT/CREATE is restricted by canEdit() */}
           </div>
         </div>
       </div>
@@ -1007,12 +1148,12 @@ export default function CustomerDetailsPage() {
                         <span
                           key={index}
                           className={`inline-flex px-2 py-1 text-sm font-semibold rounded-full ${
-                            type === "Kitchen " ? "bg-blue-100 text-blue-800" : 
-                            type === "Bedroom" ? "bg-purple-100 text-purple-800" :
+                            type.trim() === "Kitchen" ? "bg-blue-100 text-blue-800" :
+                            type.trim() === "Bedroom" ? "bg-purple-100 text-purple-800" :
                             "bg-gray-100 text-gray-800"
                           }`}
                         >
-                          {type}
+                          {type.trim()}
                         </span>
                       ))}
                     </div>
@@ -1107,6 +1248,9 @@ export default function CustomerDetailsPage() {
             <div className="text-gray-500 bg-gray-50 p-6 rounded-lg text-center">
               <Briefcase className="h-12 w-12 text-gray-300 mx-auto mb-3" />
               <p>No jobs found for this customer.</p>
+              {user?.role === "Sales" && (
+                <p className="text-sm mt-2 text-gray-600">Jobs are created from accepted quotations.</p>
+              )}
             </div>
           )}
         </div>
@@ -1149,7 +1293,7 @@ export default function CustomerDetailsPage() {
           <DialogHeader>
             <DialogTitle>{formType === "kitchen" ? "Kitchen" : "Bedroom"} Checklist Form Link Generated</DialogTitle>
             <DialogDescription>
-              Share this link with {customer.name} to fill out the {formType === "kitchen" ? "kitchen" : "bedroom"} checklist form. 
+              Share this link with {customer.name} to fill out the {formType === "kitchen" ? "kitchen" : "bedroom"} checklist form.
               The form data will be linked to their existing customer record.
             </DialogDescription>
           </DialogHeader>
@@ -1222,11 +1366,11 @@ export default function CustomerDetailsPage() {
                 }
 
                 const currentFormType = getFormType(selectedForm);
-                
+
                 if (currentFormType === "remedial") {
                   return renderRemedialForm(rawData);
                 }
-                
+
                 if (currentFormType === "document") {
                     return renderReceiptData(rawData);
                 }
@@ -1264,7 +1408,7 @@ export default function CustomerDetailsPage() {
                   "under_wall_unit_lights_profile", "under_worktop_lights_color", "kitchen_accessories",
                   "sink_details", "tap_details", "other_appliances", "appliances"
                 ];
-                
+
                 const auxiliaryFields = ['sink_tap_customer_owned', 'appliances_customer_owned'];
                 const dateFields = ['appointment_date', 'completion_date', 'deposit_date', 'installation_date', 'survey_date'];
 
@@ -1399,13 +1543,13 @@ export default function CustomerDetailsPage() {
                           {keys
                             .filter(k => {
                               const allSpecificFields = [
-                                ...customerInfoFields, ...designFields, ...termsFields, 
-                                ...signatureFields, ...bedroomFields, ...kitchenFields, 
+                                ...customerInfoFields, ...designFields, ...termsFields,
+                                ...signatureFields, ...bedroomFields, ...kitchenFields,
                                 ...auxiliaryFields, ...dateFields
                               ];
 
                               if (allSpecificFields.includes(k) || displayed.has(k)) return false;
-                              
+
                               return true;
                             })
                             .map(k => {

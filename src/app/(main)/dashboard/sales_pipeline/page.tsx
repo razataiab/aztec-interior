@@ -535,7 +535,6 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
     }, [user]);
 
     const handleDataChange = async (next: any[]) => {
-        // ... (handleDataChange remains the same)
         if (!permissions.canDragDrop) {
             alert("You don't have permission to move items in the pipeline.");
             return;
@@ -548,23 +547,20 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         });
 
         if (moved.length > 0) {
-            const unauthorizedMoves = moved.filter(item => !canUserEditItem({
-                id: item.itemId,
-                type: item.itemType,
-                customer: item.customer,
-                job: item.job,
-                reference: item.reference,
-                name: item.customer.name,
-                stage: item.stage,
-                jobType: item.jobType,
-                salesperson: item.salesperson,
-            } as PipelineItem));
+            const unauthorizedMoves = moved.filter(item => {
+                // Find the original pipeline item to get complete data
+                const originalItem = pipelineItems.find(pi => pi.id === item.itemId);
+                if (!originalItem) return true; // If we can't find it, consider it unauthorized
+                
+                return !canUserEditItem(originalItem);
+            });
 
             if (unauthorizedMoves.length > 0) {
                 alert("You don't have permission to move some of these items.");
                 return;
             }
 
+            // Continue with the rest of the function...
             setFeatures(next);
             prevFeaturesRef.current = next;
 
