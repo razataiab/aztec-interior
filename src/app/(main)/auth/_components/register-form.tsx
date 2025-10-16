@@ -26,15 +26,27 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 
+// The Zod Schema needs a slight adjustment to allow the field to be initially undefined/empty
+// before the user interacts with it. We use .optional() and .pipe(z.enum(...)) to achieve this.
+
+// Define a literal type for the roles
+const Roles = ["Manager", "HR", "Sales", "Production"] as const;
+type RoleType = (typeof Roles)[number];
+
 const FormSchema = z
   .object({
     first_name: z.string().min(1, { message: "First name is required." }),
     last_name: z.string().min(1, { message: "Last name is required." }),
     email: z.string().email({ message: "Please enter a valid email address." }),
-    // phone removed
-    role: z.enum(["Admin", "Staff", "Secratary"], {
-      errorMap: () => ({ message: "Please select a role." }),
-    }),
+    
+    // 🌟 CHANGE 1: Define 'role' as a string that must be one of the enum values
+    // but allow it to be initially undefined or empty.
+    role: z.string().pipe(
+      z.enum(Roles, {
+        errorMap: () => ({ message: "Please select a role." }),
+      })
+    ),
+
     password: z
       .string()
       .min(8, { message: "Password must be at least 8 characters." })
@@ -60,7 +72,7 @@ export function RegisterForm() {
       first_name: "",
       last_name: "",
       email: "",
-      role: "Staff", // default role
+      role: "" as RoleType, 
       password: "",
       confirmPassword: "",
     },
@@ -74,7 +86,7 @@ export function RegisterForm() {
       password: data.password,
       first_name: data.first_name,
       last_name: data.last_name,
-      role: (data.role as string) || "",
+      role: data.role, // data.role is now guaranteed to be a valid string by the Zod pipe
     };
 
     try {
@@ -84,12 +96,9 @@ export function RegisterForm() {
         toast("Registration successful", {
           description: "Your account has been created. Redirecting to login...",
         });
-
-        // allow user to see the toast briefly
         setTimeout(() => {
           router.push("/login?message=Registration successful. Please sign in.");
         }, 900);
-
         form.reset();
       } else {
         toast(result.error || "Registration failed");
@@ -164,35 +173,37 @@ export function RegisterForm() {
           )}
         />
 
-<div className="grid grid-cols-2 gap-4">
-  <FormField
-    control={form.control}
-    name="role"
-    render={({ field }) => (
-      <FormItem>
-        <FormLabel>Role *</FormLabel>
-        <FormControl>
-          <Select
-            onValueChange={(val) => field.onChange(val)}
-            value={(field.value as string) || ""}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select role" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Admin">Admin</SelectItem>
-              <SelectItem value="Staff">Staff</SelectItem>
-              <SelectItem value="Secratary">Secratary</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormControl>
-        <FormMessage />
-      </FormItem>
-    )}
-  />
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="role"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Role *</FormLabel>
+                <FormControl>
+                  <Select
+                    // 🌟 We now rely on Select's internal handling of the empty string.
+                    onValueChange={(val) => field.onChange(val)}
+                    value={field.value} 
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Manager">Manager</SelectItem>
+                      <SelectItem value="HR">HR</SelectItem>
+                      <SelectItem value="Sales">Sales</SelectItem>
+                      <SelectItem value="Production">Production</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
-  <div /> {/* Empty right column to maintain alignment */}
-</div>
+          <div />
+        </div>
 
 
         <FormField

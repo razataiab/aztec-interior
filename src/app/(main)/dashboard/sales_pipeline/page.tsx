@@ -42,13 +42,14 @@ import {
     File,
     AlertCircle,
     Filter,
+    Lock,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { format, addDays, isWithinInterval } from "date-fns";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
-// --- START OF REQUIRED CHANGES ---
+// --- START OF STAGE AND ROLE DEFINITIONS ---
 
-// 1. Define the NEW order of stages (Removed Measure, Cancelled, Reordered)
 const STAGES = [
     "Lead",
     "Survey",
@@ -67,13 +68,12 @@ const STAGES = [
 
 type Stage = (typeof STAGES)[number];
 
-// 2. Update stageColors to reflect the remaining and reordered stages
 const stageColors: Record<Stage, string> = {
-    Lead: "#6B7280",         // New Order: 1 (Grey)
-    Survey: "#EC4899",       // New Order: 2 (Pink)
-    Design: "#10B981",       // New Order: 3 (Emerald Green)
-    Quote: "#3B82F6",        // New Order: 4 (Blue)
-    Consultation: "#8B5CF6", // New Order: 5 (Purple)
+    Lead: "#6B7280",         
+    Survey: "#EC4899",        
+    Design: "#10B981",        
+    Quote: "#3B82F6",         
+    Consultation: "#8B5CF6", 
     Quoted: "#06B6D4",
     Accepted: "#059669",
     OnHold: "#6D28D9",
@@ -84,10 +84,64 @@ const stageColors: Record<Stage, string> = {
     Remedial: "#DC2626",
 };
 
-// The rest of the types and functions below use the updated STAGES constant.
+type UserRole = "Manager" | "HR" | "Sales" | "Production" | "Staff";
 
-// --- END OF REQUIRED CHANGES ---
+const ROLE_PERMISSIONS: Record<UserRole, any> = {
+    Manager: {
+        canCreate: true,
+        canEdit: true,
+        canDelete: true,
+        canViewFinancials: true,
+        canDragDrop: true,
+        canViewAllRecords: true, // Manager has full visibility
+        canSendQuotes: true,
+        canSchedule: true,
+    },
+    HR: {
+        canCreate: true,
+        canEdit: true,
+        canDelete: true,
+        canViewFinancials: true,
+        canDragDrop: true,
+        canViewAllRecords: true,
+        canSendQuotes: true,
+        canSchedule: true,
+    },
+    Sales: {
+        canCreate: true, 
+        canEdit: true, 
+        canDelete: false,
+        canViewFinancials: true, 
+        canDragDrop: true, 
+        canViewAllRecords: false, 
+        canSendQuotes: true,
+        canSchedule: false,
+    },
+    Production: {
+        canCreate: false,
+        canEdit: false,
+        canDelete: false,
+        canViewFinancials: false, 
+        canDragDrop: false, 
+        canViewAllRecords: true, 
+        canSendQuotes: false,
+        canSchedule: false,
+    },
+    Staff: {
+        canCreate: false,
+        canEdit: false,
+        canDelete: false,
+        canViewFinancials: false,
+        canDragDrop: false,
+        canViewAllRecords: false,
+        canSendQuotes: false,
+        canSchedule: false,
+    },
+};
 
+const PRODUCTION_STAGES: Stage[] = ["Accepted", "OnHold", "Production", "Delivery", "Installation", "Complete", "Remedial"];
+
+// --- END OF STAGE AND ROLE DEFINITIONS ---
 
 // Updated types based on your backend models
 type Customer = {
@@ -107,7 +161,7 @@ type Customer = {
     salesperson?: string | null;
     status: string;
     created_at?: string | null;
-    created_by?: string | null;
+    created_by?: string | null; 
     updated_at?: string | null;
     updated_by?: string | null;
 };
@@ -167,7 +221,6 @@ type AuditLog = {
     change_summary: string;
 };
 
-// Build columns for Kanban
 const makeColumns = () =>
     STAGES.map((name) => ({
         id: `col-${name.toLowerCase().replace(/\s+/g, "-")}`,
@@ -177,7 +230,6 @@ const makeColumns = () =>
 
 const columnIdToStage = (colId: string): Stage => {
     const stage = STAGES.find((s) => `col-${s.toLowerCase().replace(/\s+/g, "-")}` === colId);
-    // Use 'Lead' as a safe fallback if the stage is not found (e.g. if the item had 'Measure' previously)
     return stage ?? "Lead"; 
 };
 
@@ -212,169 +264,104 @@ export default function EnhancedPipelinePage() {
 
     const columns = useMemo(() => makeColumns(), []);
     const { user } = useAuth();
+    
+    // Get user role and permissions
+    const userRole = (user?.role || "Staff") as UserRole;
+    const permissions = ROLE_PERMISSIONS[userRole as keyof typeof ROLE_PERMISSIONS] || ROLE_PERMISSIONS.Staff;
+    
+    // Helper function to create a standardized user ID for comparison
+    const getStandardUserId = (value: string | null | undefined): string => {
+        return (value || '').toLowerCase().trim();
+    }
 
-    // Fetch data from backend
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                setLoading(true);
-                setError(null);
+    // Helper function to check if user can access an item
+    const canUserAccessItem = (item: PipelineItem): boolean => {
+        const standardUserEmail = getStandardUserId(user?.email);
+        const standardUserName = getStandardUserId(user?.name);
 
-                // First try the specialized pipeline endpoint, fallback to individual endpoints
-                try {
-                    const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline');
-                    if (pipelineResponse.ok) {
-                        const pipelineData = await pipelineResponse.json();
+        // Managers, HR (and implicitly Admin if mapped to Manager) see everything
+        if (permissions.canViewAllRecords) {
+            return true;
+        }
+        
+        // Sales staff visibility logic (Case-insensitive check)
+        if (userRole === "Sales") {
+            const standardItemSalesperson = getStandardUserId(item.salesperson);
+            const standardItemCreator = getStandardUserId(item.customer.created_by);
 
-                        // Transform the response into our PipelineItem format
-                        const items = pipelineData.map((item: any) => {
-                            const commonItem = {
-                                id: item.id,
-                                customer: item.customer,
-                                name: item.customer.name,
-                                salesperson: item.job?.salesperson_name || item.customer.salesperson,
-                                measureDate: item.job?.measure_date || item.customer.date_of_measure,
-                                // Safely handle stages that no longer exist (e.g., 'Measure')
-                                stage: STAGES.includes(item.customer.stage) ? item.customer.stage : 'Lead' as Stage,
-                            };
+            const isAssignedSalesperson = standardItemSalesperson === standardUserEmail || standardItemSalesperson === standardUserName;
+            const isCreator = standardItemCreator === standardUserEmail || standardItemCreator === standardUserName;
+            
+            return isAssignedSalesperson || isCreator;
+        }
+        
+        // Production staff can see items in production-relevant stages
+        if (userRole === "Production") {
+            return PRODUCTION_STAGES.includes(item.stage);
+        }
+        
+        return false;
+    };
 
-                            if (item.type === 'customer') {
-                                return {
-                                    ...commonItem,
-                                    type: 'customer' as const,
-                                    reference: `CUST-${item.customer.id.slice(-4).toUpperCase()}`,
-                                    jobType: item.customer.project_types?.join(', '),
-                                };
-                            } else {
-                                return {
-                                    ...commonItem,
-                                    type: 'job' as const,
-                                    job: item.job,
-                                    reference: item.job.job_reference || `JOB-${item.job.id.slice(-4).toUpperCase()}`,
-                                    stage: STAGES.includes(item.job.stage) ? item.job.stage : 'Lead' as Stage, // Safe stage check for job
-                                    jobType: item.job.job_type,
-                                    quotePrice: item.job.quote_price,
-                                    agreedPrice: item.job.agreed_price,
-                                    soldAmount: item.job.sold_amount,
-                                    deposit1: item.job.deposit1,
-                                    deposit2: item.job.deposit2,
-                                    deposit1Paid: item.job.deposit1_paid || false,
-                                    deposit2Paid: item.job.deposit2_paid || false,
-                                    deliveryDate: item.job.delivery_date,
-                                };
-                            }
-                        });
+    // Helper function to check if user can edit an item
+    const canUserEditItem = (item: PipelineItem): boolean => {
+        if (!permissions.canEdit) return false;
+        
+        // Managers and HR can edit everything
+        if (userRole === "Manager" || userRole === "HR") {
+            return true;
+        }
+        
+        // Sales staff can only edit their own records (case-insensitive check)
+        if (userRole === "Sales") {
+            const standardItemSalesperson = getStandardUserId(item.salesperson);
+            const standardUserEmail = getStandardUserId(user?.email);
+            const standardUserName = getStandardUserId(user?.name);
 
-                        setPipelineItems(items);
+            return standardItemSalesperson === standardUserEmail || standardItemSalesperson === standardUserName;
+        }
+        
+        return false;
+    };
+    
+    // NOTE: filterAuditNotes function is removed as per user request to remove all notes.
+    // The previous implementation was only to prevent linting errors when the call was removed.
+    // Since the user is asking again, we remove the function definition entirely, 
+    // as it is not used in the rendering logic anymore.
 
-                        // Convert to kanban format
-                        const kanbanFeatures = items.map((item: PipelineItem) => ({
-                            id: item.id, // CRITICAL: Use 'id' not 'kanbanId' for the KanbanProvider
-                            name: `${item.reference} — ${item.name}`,
-                            column: stageToColumnId(item.stage),
-                            itemId: item.id,
-                            itemType: item.type,
-                            // Include all the properties we need
-                            customer: item.customer,
-                            job: item.job,
-                            reference: item.reference,
-                            stage: item.stage,
-                            jobType: item.jobType,
-                            quotePrice: item.quotePrice,
-                            agreedPrice: item.agreedPrice,
-                            soldAmount: item.soldAmount,
-                            deposit1: item.deposit1,
-                            deposit2: item.deposit2,
-                            deposit1Paid: item.deposit1Paid,
-                            deposit2Paid: item.deposit2Paid,
-                            measureDate: item.measureDate,
-                            deliveryDate: item.deliveryDate,
-                            salesperson: item.salesperson,
-                        }));
 
-                        setFeatures(kanbanFeatures);
-                        prevFeaturesRef.current = kanbanFeatures;
-                        return; // Successfully loaded from pipeline endpoint
-                    }
-                } catch (pipelineError) {
-                    console.log('Pipeline endpoint not available, trying individual endpoints...');
-                }
+    // Function to map PipelineItem to Kanban features
+    const mapPipelineToFeatures = (items: PipelineItem[]) => {
+        return items.map((item) => ({
+            id: item.id,
+            name: `${item.reference} — ${item.name}`,
+            column: stageToColumnId(item.stage),
+            itemId: item.id,
+            itemType: item.type,
+            customer: item.customer,
+            job: item.job,
+            reference: item.reference,
+            stage: item.stage,
+            jobType: item.jobType,
+            quotePrice: item.quotePrice,
+            agreedPrice: item.agreedPrice,
+            soldAmount: item.soldAmount,
+            deposit1: item.deposit1,
+            deposit2: item.deposit2,
+            deposit1Paid: item.deposit1Paid,
+            deposit2Paid: item.deposit2Paid,
+            measureDate: item.measureDate,
+            deliveryDate: item.deliveryDate,
+            salesperson: item.salesperson,
+        }));
+    }
 
-                // Fallback to individual endpoints if pipeline endpoint doesn't work
-                const customersResponse = await fetch('http://127.0.0.1:5000/customers');
-
-                if (!customersResponse.ok) {
-                    // If customers endpoint also doesn't exist, show helpful error
-                    if (customersResponse.status === 404) {
-                        throw new Error('API endpoints not found. Please ensure your backend server is running and the database routes are properly configured.');
-                    }
-                    throw new Error(`Failed to fetch customers: ${customersResponse.statusText}`);
-                }
-
-                const customersData = await customersResponse.json();
-                setCustomers(customersData);
-
-                // Try to fetch jobs, but don't fail if endpoint doesn't exist
-                let jobsData: Job[] = [];
-                try {
-                    const jobsResponse = await fetch('http://127.0.0.1:5000/jobs');
-                    if (jobsResponse.ok) {
-                        jobsData = await jobsResponse.json();
-                        setJobs(jobsData);
-                    }
-                } catch (jobsError) {
-                    console.log('Jobs endpoint not available, showing customers only');
-                }
-
-                // Create pipeline items from customers and jobs (fallback method)
-                const items = createPipelineItemsFromSeparateData(customersData, jobsData);
-                setPipelineItems(items);
-
-                // Convert to kanban format
-                const kanbanFeatures = items.map((item: PipelineItem) => ({
-                    id: item.id, // CRITICAL: Use 'id' not 'kanbanId' for the KanbanProvider
-                    name: `${item.reference} — ${item.name}`,
-                    column: stageToColumnId(item.stage),
-                    itemId: item.id,
-                    itemType: item.type,
-                    // Include all the properties we need
-                    customer: item.customer,
-                    job: item.job,
-                    reference: item.reference,
-                    stage: item.stage,
-                    jobType: item.jobType,
-                    quotePrice: item.quotePrice,
-                    agreedPrice: item.agreedPrice,
-                    soldAmount: item.soldAmount,
-                    deposit1: item.deposit1,
-                    deposit2: item.deposit2,
-                    deposit1Paid: item.deposit1Paid,
-                    deposit2Paid: item.deposit2Paid,
-                    measureDate: item.measureDate,
-                    deliveryDate: item.deliveryDate,
-                    salesperson: item.salesperson,
-                }));
-
-                setFeatures(kanbanFeatures);
-                prevFeaturesRef.current = kanbanFeatures;
-
-            } catch (err) {
-                console.error('Error fetching pipeline data:', err);
-                setError(err instanceof Error ? err.message : 'Failed to load data');
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchData();
-    }, []);
 
     // Fallback method to create pipeline items when using separate endpoints
     const createPipelineItemsFromSeparateData = (customers: any[], jobs: any[]): PipelineItem[] => {
         const items: PipelineItem[] = [];
         const jobsByCustomerId = new Map<string, any[]>();
 
-        // Group jobs by customer
         jobs.forEach(job => {
             if (!jobsByCustomerId.has(job.customer_id)) {
                 jobsByCustomerId.set(job.customer_id, []);
@@ -385,11 +372,9 @@ export default function EnhancedPipelinePage() {
         customers.forEach(customer => {
             const customerJobs = jobsByCustomerId.get(customer.id) || [];
             
-            // Safely determine the stage, defaulting to 'Lead' if the original stage is invalid
             const customerStage = STAGES.includes(customer.stage) ? customer.stage : 'Lead' as Stage;
 
             if (customerJobs.length === 0) {
-                // Customer without jobs - show as customer item
                 items.push({
                     id: `customer-${customer.id}`,
                     type: 'customer',
@@ -402,7 +387,6 @@ export default function EnhancedPipelinePage() {
                     salesperson: customer.salesperson,
                 });
             } else {
-                // Customer with jobs - show each job as separate item
                 customerJobs.forEach(job => {
                     const jobStage = STAGES.includes(job.stage) ? job.stage : 'Lead' as Stage;
 
@@ -420,8 +404,8 @@ export default function EnhancedPipelinePage() {
                         soldAmount: job.sold_amount,
                         deposit1: job.deposit1,
                         deposit2: job.deposit2,
-                        deposit1Paid: false, // TODO: Calculate from Payment records
-                        deposit2Paid: false, // TODO: Calculate from Payment records
+                        deposit1Paid: false, 
+                        deposit2Paid: false, 
                         measureDate: job.measure_date || customer.date_of_measure,
                         deliveryDate: job.delivery_date,
                         salesperson: job.salesperson_name || customer.salesperson,
@@ -433,28 +417,154 @@ export default function EnhancedPipelinePage() {
         return items;
     };
 
-    // Replace your handleDataChange function with this improved version
+
+    // Fetch data from backend
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                setLoading(true);
+                setError(null);
+
+                let customersData: Customer[] = [];
+                let jobsData: Job[] = [];
+                let pipelineItemsRetrieved: any[] = [];
+
+                // 1. Try fetching from the combined pipeline endpoint
+                try {
+                    const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline');
+                    if (pipelineResponse.ok) {
+                        const rawPipelineData = await pipelineResponse.json();
+                        
+                        pipelineItemsRetrieved = rawPipelineData.map((item: any) => {
+                            const primaryStage = item.type === 'customer' 
+                                ? item.customer.stage 
+                                : (item.job?.stage || item.customer.stage);
+                            
+                            const validStage = STAGES.includes(primaryStage) ? primaryStage : 'Lead' as Stage;
+
+                            const commonItem = {
+                                id: item.id,
+                                customer: item.customer,
+                                name: item.customer.name,
+                                salesperson: item.job?.salesperson_name || item.customer.salesperson,
+                                measureDate: item.job?.measure_date || item.customer.date_of_measure,
+                                stage: validStage,
+                            };
+
+                            if (item.type === 'customer') {
+                                return {
+                                    ...commonItem,
+                                    type: 'customer' as const,
+                                    reference: `CUST-${item.customer.id.slice(-4).toUpperCase()}`,
+                                    jobType: item.customer.project_types?.join(', '),
+                                };
+                            } else {
+                                const jobStage = item.job?.stage ? 
+                                    (STAGES.includes(item.job.stage) ? item.job.stage : 'Lead') : 
+                                    validStage;
+
+                                return {
+                                    ...commonItem,
+                                    type: 'job' as const,
+                                    job: item.job,
+                                    reference: item.job?.job_reference || `JOB-${item.job.id.slice(-4).toUpperCase()}`,
+                                    stage: jobStage as Stage,
+                                    jobType: item.job?.job_type,
+                                    quotePrice: item.job?.quote_price,
+                                    agreedPrice: item.job?.agreed_price,
+                                    soldAmount: item.job?.sold_amount,
+                                    deposit1: item.job?.deposit1,
+                                    deposit2: item.job?.deposit2,
+                                    deposit1Paid: item.job?.deposit1_paid || false,
+                                    deposit2Paid: item.job?.deposit2_paid || false,
+                                    deliveryDate: item.job?.delivery_date,
+                                    measureDate: item.job?.measure_date,
+                                };
+                            }
+                        });
+
+                        // Filter and set data immediately
+                        const filteredItems = pipelineItemsRetrieved.filter((item: PipelineItem) => canUserAccessItem(item));
+                        setPipelineItems(filteredItems);
+                        setFeatures(mapPipelineToFeatures(filteredItems));
+                        prevFeaturesRef.current = mapPipelineToFeatures(filteredItems);
+                        return; // Successfully loaded from pipeline endpoint
+                    }
+                } catch (pipelineError) {
+                    console.warn('Pipeline endpoint not available or failed, falling back to individual endpoints...');
+                }
+
+                // 2. Fallback to individual endpoints (logic remains the same)
+                const customersResponse = await fetch('http://127.0.0.1:5000/customers');
+                if (!customersResponse.ok) {
+                    throw new Error(`Failed to fetch customers: ${customersResponse.statusText}`);
+                }
+                customersData = await customersResponse.json();
+
+                try {
+                    const jobsResponse = await fetch('http://127.0.0.1:5000/jobs');
+                    if (jobsResponse.ok) {
+                        jobsData = await jobsResponse.json();
+                    }
+                } catch (jobsError) {
+                    console.log('Jobs endpoint not available, showing customers only');
+                }
+
+                const items = createPipelineItemsFromSeparateData(customersData, jobsData);
+                
+                const filteredItems = items.filter(canUserAccessItem);
+                setPipelineItems(filteredItems);
+
+                const kanbanFeatures = mapPipelineToFeatures(filteredItems);
+                setFeatures(kanbanFeatures);
+                prevFeaturesRef.current = kanbanFeatures;
+
+            } catch (err) {
+                console.error('Final Error fetching pipeline data:', err);
+                setError(err instanceof Error ? err.message : 'Failed to load data');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchData();
+    }, [user]);
 
     const handleDataChange = async (next: any[]) => {
-        console.log('handleDataChange called with:', next.length, 'items');
+        // ... (handleDataChange remains the same)
+        if (!permissions.canDragDrop) {
+            alert("You don't have permission to move items in the pipeline.");
+            return;
+        }
 
         const prev = prevFeaturesRef.current;
-
-        // Find items that actually changed columns (not just reordered)
         const moved = next.filter((n) => {
-            const p = prev.find((x) => x.id === n.id); // Use 'id' here
+            const p = prev.find((x) => x.id === n.id);
             return p && p.column !== n.column;
         });
 
-        console.log('Moved items:', moved.length, 'items');
-
         if (moved.length > 0) {
-            // Update the UI immediately for smooth UX (optimistic update)
+            const unauthorizedMoves = moved.filter(item => !canUserEditItem({
+                id: item.itemId,
+                type: item.itemType,
+                customer: item.customer,
+                job: item.job,
+                reference: item.reference,
+                name: item.customer.name,
+                stage: item.stage,
+                jobType: item.jobType,
+                salesperson: item.salesperson,
+            } as PipelineItem));
+
+            if (unauthorizedMoves.length > 0) {
+                alert("You don't have permission to move some of these items.");
+                return;
+            }
+
             setFeatures(next);
             prevFeaturesRef.current = next;
 
             try {
-                // Batch update all moved items
                 const updatePromises = moved.map(async (item) => {
                     const newStage = columnIdToStage(item.column);
                     const entityId = item.itemId.replace('customer-', '').replace('job-', '');
@@ -464,14 +574,13 @@ export default function EnhancedPipelinePage() {
                         ? `http://127.0.0.1:5000/customers/${entityId}/stage`
                         : `http://127.0.0.1:5000/jobs/${entityId}/stage`;
 
-                    console.log(`Updating ${item.itemType} ${entityId} to stage ${newStage}`);
-
                     const response = await fetch(endpoint, {
                         method: "PATCH",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             stage: newStage,
-                            reason: "Moved via Kanban board",
+                            // CRITICAL: We include the reason, which will trigger the logging on the backend.
+                            reason: "Moved via Kanban board", 
                             updated_by: user?.email || "current_user"
                         }),
                     });
@@ -482,11 +591,9 @@ export default function EnhancedPipelinePage() {
                     }
 
                     const result = await response.json();
-                    console.log('Update successful:', result);
-
-                    // Log audit entry (local)
+                    
                     const auditEntry: AuditLog = {
-                        audit_id: `audit-${Date.now()}-${item.itemId}`,
+                        audit_id: `audit-${Date.now()}-${item.itemId}`, 
                         entity_type: item.itemType === 'customer' ? 'Customer' : 'Job',
                         entity_id: item.itemId,
                         action: "update",
@@ -496,8 +603,7 @@ export default function EnhancedPipelinePage() {
                     };
                     setAuditLogs((prev) => [auditEntry, ...prev.slice(0, 4)]);
 
-                    // Trigger automation for "Accepted" stage (jobs only)
-                    if (newStage === "Accepted" && item.itemType === 'job') {
+                    if (newStage === "Accepted" && item.itemType === 'job' && (userRole === "Manager" || userRole === "HR" || userRole === "Sales")) {
                         try {
                             await fetch(`http://127.0.0.1:5000/invoices`, {
                                 method: "POST",
@@ -507,7 +613,6 @@ export default function EnhancedPipelinePage() {
                                     templateId: "default_invoice"
                                 }),
                             });
-                            console.log('Invoice created automatically for accepted job');
                         } catch (e) {
                             console.warn('Failed to create invoice automatically:', e);
                         }
@@ -516,29 +621,20 @@ export default function EnhancedPipelinePage() {
                     return result;
                 });
 
-                // Wait for all updates to complete
                 await Promise.all(updatePromises);
-                console.log('All stage updates completed successfully');
-
-                // Optional: Only refetch if you need to sync other data
-                // For better performance, you can skip this since we already updated the UI optimistically
-                // await refetchPipelineData();
 
             } catch (error) {
                 console.error('Failed to update stages:', error);
-                // Revert UI on any error (rollback optimistic update)
                 setFeatures(prev);
                 prevFeaturesRef.current = prev;
                 alert(`Failed to update stage: ${error instanceof Error ? error.message : 'Unknown error'}. Changes have been reverted.`);
             }
         } else {
-            // Just a reorder within the same column - update UI only
             setFeatures(next);
             prevFeaturesRef.current = next;
         }
     };
 
-    // Add this helper function to refetch pipeline data (kept for completeness, though full refetch is often slow)
     const refetchPipelineData = async () => {
         try {
             const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline');
@@ -546,13 +642,19 @@ export default function EnhancedPipelinePage() {
                 const pipelineData = await pipelineResponse.json();
 
                 const items = pipelineData.map((item: any) => {
+                    const primaryStage = item.type === 'customer' 
+                        ? item.customer.stage 
+                        : (item.job?.stage || item.customer.stage);
+
+                    const validStage = STAGES.includes(primaryStage) ? primaryStage : 'Lead' as Stage;
+
                     const commonItem = {
                         id: item.id,
                         customer: item.customer,
                         name: item.customer.name,
                         salesperson: item.job?.salesperson_name || item.customer.salesperson,
                         measureDate: item.job?.measure_date || item.customer.date_of_measure,
-                        stage: STAGES.includes(item.customer.stage) ? item.customer.stage : 'Lead' as Stage,
+                        stage: validStage,
                     };
 
                     if (item.type === 'customer') {
@@ -563,12 +665,16 @@ export default function EnhancedPipelinePage() {
                             jobType: item.customer.project_types?.join(', '),
                         };
                     } else {
+                        const jobStage = item.job?.stage ? 
+                            (STAGES.includes(item.job.stage) ? item.job.stage : 'Lead') : 
+                            validStage;
+
                         return {
                             ...commonItem,
                             type: 'job' as const,
                             job: item.job,
                             reference: item.job.job_reference || `JOB-${item.job.id.slice(-4).toUpperCase()}`,
-                            stage: STAGES.includes(item.job.stage) ? item.job.stage : 'Lead' as Stage,
+                            stage: jobStage as Stage,
                             jobType: item.job.job_type,
                             quotePrice: item.job.quote_price,
                             agreedPrice: item.job.agreed_price,
@@ -582,37 +688,15 @@ export default function EnhancedPipelinePage() {
                     }
                 });
 
-                setPipelineItems(items);
+                const filteredItems = items.filter((item: PipelineItem) => canUserAccessItem(item));
+                setPipelineItems(filteredItems);
 
-                const updatedFeatures = items.map((item: PipelineItem) => ({
-                    id: item.id, // Use 'id' not 'kanbanId'
-                    name: `${item.reference} — ${item.name}`,
-                    column: stageToColumnId(item.stage),
-                    itemId: item.id,
-                    itemType: item.type,
-                    customer: item.customer,
-                    job: item.job,
-                    reference: item.reference,
-                    stage: item.stage,
-                    jobType: item.jobType,
-                    quotePrice: item.quotePrice,
-                    agreedPrice: item.agreedPrice,
-                    soldAmount: item.soldAmount,
-                    deposit1: item.deposit1,
-                    deposit2: item.deposit2,
-                    deposit1Paid: item.deposit1Paid,
-                    deposit2Paid: item.deposit2Paid,
-                    measureDate: item.measureDate,
-                    deliveryDate: item.deliveryDate,
-                    salesperson: item.salesperson,
-                }));
-
+                const updatedFeatures = mapPipelineToFeatures(filteredItems);
                 setFeatures(updatedFeatures);
                 prevFeaturesRef.current = updatedFeatures;
             }
         } catch (pipelineError) {
             console.log('Pipeline refetch failed, using fallback');
-            // Fallback logic here if needed
         }
     };
 
@@ -699,7 +783,7 @@ export default function EnhancedPipelinePage() {
             stageValues[item.stage] += value;
 
             // Outstanding balance: unpaid deposits (only for jobs)
-            if (item.type === 'job') {
+            if (item.type === 'job' && permissions.canViewFinancials) {
                 if (item.deposit1 && !item.deposit1Paid) outstandingBalance += item.deposit1;
                 if (item.deposit2 && !item.deposit2Paid) outstandingBalance += item.deposit2;
             }
@@ -722,7 +806,7 @@ export default function EnhancedPipelinePage() {
         });
 
         return { stageCounts, stageValues, outstandingBalance, jobsDueForMeasure, upcomingDeliveries };
-    }, [filteredListItems]);
+    }, [filteredListItems, permissions.canViewFinancials]);
 
     // Get unique values for filters
     const salespeople = useMemo(() =>
@@ -737,6 +821,13 @@ export default function EnhancedPipelinePage() {
 
     // Handle stage change with audit logging
     const handleStageChange = async (itemId: string, newStage: Stage, reason: string, itemType: 'customer' | 'job') => {
+        // Check permissions
+        const item = pipelineItems.find(i => i.id === itemId);
+        if (!item || !canUserEditItem(item)) {
+            alert("You don't have permission to change the stage of this item.");
+            return;
+        }
+
         try {
             const entityId = itemId.replace('customer-', '').replace('job-', '');
             const endpoint = itemType === 'customer'
@@ -760,14 +851,14 @@ export default function EnhancedPipelinePage() {
                 entity_type: itemType === 'customer' ? 'Customer' : 'Job',
                 entity_id: itemId,
                 action: "update",
-                changed_by: user?.email || "current_user", // Replace with actual user
+                changed_by: user?.email || "current_user",
                 changed_at: new Date().toISOString(),
                 change_summary: `Stage changed to ${newStage}. Reason: ${reason}`,
             };
             setAuditLogs((prev) => [auditEntry, ...prev.slice(0, 4)]);
 
-            // Trigger automation for "Accepted" stage
-            if (newStage === "Accepted" && itemType === 'job') {
+            // Trigger automation for "Accepted" stage - only for authorized users
+            if (newStage === "Accepted" && itemType === 'job' && permissions.canSendQuotes) {
                 try {
                     await fetch(`http://127.0.0.1:5000/invoices`, {
                         method: "POST",
@@ -801,14 +892,27 @@ export default function EnhancedPipelinePage() {
     };
 
     const handleCreateJob = () => {
+        if (!permissions.canCreate) {
+            alert("You don't have permission to create new jobs.");
+            return;
+        }
         window.location.href = '/jobs/new';
     };
 
     const handleCreateCustomer = () => {
+        if (!permissions.canCreate) {
+            alert("You don't have permission to create new customers.");
+            return;
+        }
         window.location.href = '/customers/new';
     };
 
     const handleSendQuote = async (itemId: string) => {
+        if (!permissions.canSendQuotes) {
+            alert("You don't have permission to send quotes.");
+            return;
+        }
+
         try {
             const entityId = itemId.replace('job-', '').replace('customer-', '');
             await fetch(`http://127.0.0.1:5000/jobs/${entityId}/quotes`, {
@@ -824,6 +928,10 @@ export default function EnhancedPipelinePage() {
     };
 
     const handleSchedule = (itemId: string) => {
+        if (!permissions.canSchedule) {
+            alert("You don't have permission to schedule items.");
+            return;
+        }
         console.log("Scheduling for item:", itemId);
         // Open schedule modal or redirect
     };
@@ -889,8 +997,13 @@ export default function EnhancedPipelinePage() {
             {/* Header */}
             <div className="flex justify-between items-center">
                 <h1 className="text-3xl font-bold">Sales Pipeline</h1>
-                <div className="flex gap-2">
-                    {user?.role !== "Staff" && (
+                <div className="flex items-center gap-2">
+                    {/* Show role badge */}
+                    <Badge variant="outline" className="text-xs">
+                        {userRole} View
+                    </Badge>
+                    
+                    {permissions.canCreate && (
                         <Button variant="outline" size="sm" onClick={handleCreateJob}>
                             <Plus className="h-4 w-4 mr-2" />
                             New Job
@@ -898,6 +1011,25 @@ export default function EnhancedPipelinePage() {
                     )}
                 </div>
             </div>
+
+            {/* Role-based information alerts */}
+            {userRole === "Sales" && (
+                <Alert className="border-blue-200 bg-blue-50">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                        You are viewing your assigned customers and leads. Contact your manager to view or reassign other records.
+                    </AlertDescription>
+                </Alert>
+            )}
+
+            {userRole === "Production" && (
+                <Alert className="border-orange-200 bg-orange-50">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                        You have read-only access to jobs in production stages. Pricing information is hidden.
+                    </AlertDescription>
+                </Alert>
+            )}
 
             {/* Search + Filters */}
             <div className="flex flex-wrap gap-4 items-center">
@@ -922,20 +1054,22 @@ export default function EnhancedPipelinePage() {
                         <DropdownMenuLabel>Filters</DropdownMenuLabel>
                         <DropdownMenuSeparator />
 
-                        {/* Salesperson filter */}
-                        <Select value={filterSalesperson} onValueChange={setFilterSalesperson}>
-                            <SelectTrigger>
-                                <SelectValue placeholder="All Salespeople" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All Salespeople</SelectItem>
-                                {salespeople.map((person) => (
-                                    <SelectItem key={person} value={person!}>
-                                        {person}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                        {/* Salesperson filter - only show for users with full visibility */}
+                        {permissions.canViewAllRecords && (
+                            <Select value={filterSalesperson} onValueChange={setFilterSalesperson}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="All Salespeople" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All Salespeople</SelectItem>
+                                    {salespeople.map((person) => (
+                                        <SelectItem key={person} value={person!}>
+                                            {person}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
 
                         {/* Stage filter */}
                         <Select value={filterStage} onValueChange={setFilterStage}>
@@ -1004,7 +1138,11 @@ export default function EnhancedPipelinePage() {
                                 className="flex items-start h-full gap-4 p-3"
                                 style={{ width: 'max-content', minWidth: '100%' }}
                             >
-                                <KanbanProvider columns={columns} data={filteredFeatures} onDataChange={handleDataChange}>
+                                <KanbanProvider 
+                                    columns={columns} 
+                                    data={filteredFeatures} 
+                                    onDataChange={permissions.canDragDrop ? handleDataChange : undefined}
+                                >
                                     {(column) => (
                                         <div
                                             key={column.id}
@@ -1028,204 +1166,227 @@ export default function EnhancedPipelinePage() {
                                                     id={column.id}
                                                     className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[850px]"
                                                 >
-                                                    {(feature: any) => (
-                                                        <KanbanCard
-                                                            column={column.id}
-                                                            id={feature.id} // Use 'id' not 'kanbanId'
-                                                            key={feature.id} // Use 'id' not 'kanbanId'
-                                                            name={feature.name}
-                                                            className={`bg-white border border-gray-200 rounded-md shadow-sm hover:shadow-md transition-shadow cursor-grab p-2 ${feature.itemType === 'job' ? 'pb-0' : ''}`}
-                                                        >
-                                                            <div className="space-y-3">
-                                                                {/* Header */}
-                                                                <div className="flex items-start justify-between gap-2">
-                                                                    <div className="min-w-0 flex-1 pr-2">
-                                                                        <p className="font-semibold text-sm text-black break-words">
-                                                                            {feature.customer.name}
-                                                                        </p>
+                                                    {(feature: any) => {
+                                                        const isEditable = canUserEditItem({
+                                                            id: feature.itemId,
+                                                            type: feature.itemType,
+                                                            customer: feature.customer,
+                                                            job: feature.job,
+                                                            reference: feature.reference,
+                                                            name: feature.customer.name,
+                                                            stage: feature.stage,
+                                                            jobType: feature.jobType,
+                                                            salesperson: feature.salesperson,
+                                                        } as PipelineItem);
+                                                        
+                                                        // NOTE: All notes rendering logic is explicitly removed here.
 
-                                                                        {/* Show reference below customer name for both types */}
-                                                                        <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
-                                                                            <span className="truncate">
-                                                                                {feature.reference}
-                                                                            </span>
+                                                        return (
+                                                            <KanbanCard
+                                                                column={column.id}
+                                                                id={feature.id}
+                                                                key={feature.id}
+                                                                name={feature.name}
+                                                                className={`bg-white border border-gray-200 rounded-md shadow-sm hover:shadow-md transition-shadow ${permissions.canDragDrop && isEditable ? 'cursor-grab' : 'cursor-not-allowed opacity-90'} p-2 ${feature.itemType === 'job' ? 'pb-0' : ''}`}
+                                                            >
+                                                                <div className="space-y-3">
+                                                                    {/* Lock icon for non-editable items */}
+                                                                    {!isEditable && (
+                                                                        <div className="absolute top-1 right-1">
+                                                                            <Lock className="h-3 w-3 text-gray-400" />
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Header */}
+                                                                    <div className="flex items-start justify-between gap-2">
+                                                                        <div className="min-w-0 flex-1 pr-2">
+                                                                            <p className="font-semibold text-sm text-black break-words">
+                                                                                {feature.customer.name}
+                                                                            </p>
+
+                                                                            {/* Show reference below customer name for both types */}
+                                                                            <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
+                                                                                <span className="truncate">
+                                                                                    {feature.reference}
+                                                                                </span>
+                                                                            </div>
+                                                                        </div>
+
+                                                                        <div className="flex flex-col gap-1 flex-shrink-0">
+                                                                            {/* Render each job/project type as its own badge */}
+                                                                            {feature.jobType &&
+                                                                                feature.jobType
+                                                                                    .split(",")
+                                                                                    .map((t: string, i: number) => (
+                                                                                        <Badge key={i} variant="outline" className="text-xs whitespace-nowrap">
+                                                                                            {t.trim()}
+                                                                                        </Badge>
+                                                                                    ))}
                                                                         </div>
                                                                     </div>
 
-                                                                    <div className="flex flex-col gap-1 flex-shrink-0">
-                                                                        {/* Render each job/project type as its own badge */}
-                                                                        {feature.jobType &&
-                                                                            feature.jobType
-                                                                                .split(",")
-                                                                                .map((t: string, i: number) => (
-                                                                                    <Badge key={i} variant="outline" className="text-xs whitespace-nowrap">
-                                                                                        {t.trim()}
-                                                                                    </Badge>
-                                                                                ))}
-                                                                    </div>
-                                                                </div>
+                                                                    {/* Contact Info - only show if available */}
+                                                                    {(feature.customer.phone || feature.customer.email || feature.customer.address) && (
+                                                                        <div className="space-y-1 text-xs text-muted-foreground">
+                                                                            {feature.customer.phone && (
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <Phone className="h-3 w-3 flex-shrink-0" />
+                                                                                    <span className="truncate">{feature.customer.phone}</span>
+                                                                                </div>
+                                                                            )}
+                                                                            {feature.customer.email && (
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <Mail className="h-3 w-3 flex-shrink-0" />
+                                                                                    <span className="truncate">{feature.customer.email}</span>
+                                                                                </div>
+                                                                            )}
+                                                                            {feature.customer.address && (
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <MapPin className="h-3 w-3 flex-shrink-0" />
+                                                                                    <span className="truncate">{feature.customer.address}</span>
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    )}
 
-                                                                {/* Contact Info - only show if available */}
-                                                                {(feature.customer.phone || feature.customer.email || feature.customer.address) && (
-                                                                    <div className="space-y-1 text-xs text-muted-foreground">
-                                                                        {feature.customer.phone && (
+                                                                    {/* Job Details - conditional rendering based on available data and permissions */}
+                                                                    <div className="space-y-2 text-xs">
+                                                                        {feature.salesperson && (
                                                                             <div className="flex items-center gap-2">
-                                                                                <Phone className="h-3 w-3 flex-shrink-0" />
-                                                                                <span className="truncate">{feature.customer.phone}</span>
+                                                                                <Users className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                                                                <span className="truncate">{feature.salesperson}</span>
                                                                             </div>
                                                                         )}
-                                                                        {feature.customer.email && (
+                                                                        {feature.measureDate && (
                                                                             <div className="flex items-center gap-2">
-                                                                                <Mail className="h-3 w-3 flex-shrink-0" />
-                                                                                <span className="truncate">{feature.customer.email}</span>
+                                                                                <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                                                                <span className="truncate">Measure: {formatDate(feature.measureDate)}</span>
                                                                             </div>
                                                                         )}
-                                                                        {feature.customer.address && (
+                                                                        
+                                                                        {/* Financial information - only show if user has permission */}
+                                                                        {permissions.canViewFinancials && (
+                                                                            <>
+                                                                                {feature.quotePrice && (
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <DollarSign className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                                                                        <span className="truncate">Quote: £{feature.quotePrice.toFixed(2)}</span>
+                                                                                    </div>
+                                                                                )}
+                                                                                {feature.agreedPrice && (
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <Check className="h-3 w-3 text-green-500 flex-shrink-0" />
+                                                                                        <span className="truncate">Agreed: £{feature.agreedPrice.toFixed(2)}</span>
+                                                                                    </div>
+                                                                                )}
+                                                                                {feature.soldAmount && (
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <Check className="h-3 w-3 text-green-500 flex-shrink-0" />
+                                                                                        <span className="truncate">Sold: £{feature.soldAmount.toFixed(2)}</span>
+                                                                                    </div>
+                                                                                )}
+                                                                                {feature.deposit1 && (
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <div
+                                                                                            className={`h-2 w-2 rounded-full flex-shrink-0 ${feature.deposit1Paid ? "bg-green-500" : "bg-red-500"}`}
+                                                                                        />
+                                                                                        <span className="truncate">
+                                                                                            Deposit 1: £{feature.deposit1.toFixed(2)}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                )}
+                                                                                {feature.deposit2 && (
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        <div
+                                                                                            className={`h-2 w-2 rounded-full flex-shrink-0 ${feature.deposit2Paid ? "bg-green-500" : "bg-red-500"}`}
+                                                                                        />
+                                                                                        <span className="truncate">
+                                                                                            Deposit 2: £{feature.deposit2.toFixed(2)}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                )}
+                                                                            </>
+                                                                        )}
+                                                                        
+                                                                        {feature.deliveryDate && (
                                                                             <div className="flex items-center gap-2">
-                                                                                <MapPin className="h-3 w-3 flex-shrink-0" />
-                                                                                <span className="truncate">{feature.customer.address}</span>
+                                                                                <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                                                                <span className="truncate">Delivery: {formatDate(feature.deliveryDate)}</span>
                                                                             </div>
                                                                         )}
                                                                     </div>
-                                                                )}
 
-                                                                {/* Job Details - conditional rendering based on available data */}
-                                                                <div className="space-y-2 text-xs">
-                                                                    {feature.salesperson && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <Users className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                                                                            <span className="truncate">{feature.salesperson}</span>
-                                                                        </div>
-                                                                    )}
-                                                                    {feature.measureDate && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                                                                            <span className="truncate">Measure: {formatDate(feature.measureDate)}</span>
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Only show quote price if it exists */}
-                                                                    {feature.quotePrice && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <DollarSign className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Only show agreed price if it exists */}
-                                                                    {feature.agreedPrice && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <Check className="h-3 w-3 text-green-500 flex-shrink-0" />
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Only show sold amount if it exists */}
-                                                                    {feature.soldAmount && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <Check className="h-3 w-3 text-green-500 flex-shrink-0" />
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Only show deposit 1 if it exists */}
-                                                                    {feature.deposit1 && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <div
-                                                                                className={`h-2 w-2 rounded-full flex-shrink-0 ${feature.deposit1Paid ? "bg-green-500" : "bg-red-500"}`}
-                                                                            />
-                                                                            <span className="truncate">
-                                                                            </span>
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Only show deposit 2 if it exists */}
-                                                                    {feature.deposit2 && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <div
-                                                                                className={`h-2 w-2 rounded-full flex-shrink-0 ${feature.deposit2Paid ? "bg-green-500" : "bg-red-500"}`}
-                                                                            />
-                                                                            <span className="truncate">
-                                                                            </span>
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Only show delivery date if it exists */}
-                                                                    {feature.deliveryDate && (
-                                                                        <div className="flex items-center gap-2">
-                                                                            <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                                                                            <span className="truncate">Delivery: {formatDate(feature.deliveryDate)}</span>
-                                                                        </div>
-                                                                    )}
-                                                                </div>
+                                                                    {/* Comments - REMOVED for this version */}
+                                                                    
 
-                                                                {/* Comments - show customer notes or job notes */}
-                                                                {(feature.customer.notes || (feature.job && feature.job.notes)) && (
-                                                                    <div className="text-xs bg-gray-50 p-2 rounded border">
-                                                                        <p className="text-gray-600 italic leading-relaxed line-clamp-3">
-                                                                            {feature.job?.notes || feature.customer.notes}
-                                                                        </p>
-                                                                    </div>
-                                                                )}
-
-                                                                {/* Action Buttons (fixed to the bottom with padding) */}
-                                                                <div className="flex gap-1 pt-2 pb-1">
-                                                                    <Button
-                                                                        size="sm"
-                                                                        variant="ghost"
-                                                                        className="h-6 px-1 text-xs flex-1 hover:bg-gray-100"
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            handleOpenItem(feature.itemId, feature.itemType);
-                                                                        }}
-                                                                        title={`Open ${feature.itemType === 'customer' ? 'Customer' : 'Job'}`}
-                                                                    >
-                                                                        <Eye className="h-3 w-3" />
-                                                                    </Button>
-
-                                                                    {/* Only show quote action if appropriate stage and item type */}
-                                                                    {(feature.stage === 'Quote' || feature.stage === 'Design' || feature.stage === 'Quoted') && (
+                                                                    {/* Action Buttons (fixed to the bottom with padding) */}
+                                                                    <div className="flex gap-1 pt-2 pb-1">
                                                                         <Button
                                                                             size="sm"
                                                                             variant="ghost"
                                                                             className="h-6 px-1 text-xs flex-1 hover:bg-gray-100"
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
-                                                                                handleSendQuote(feature.itemId);
+                                                                                handleOpenItem(feature.itemId, feature.itemType);
                                                                             }}
-                                                                            title="Send Quote"
+                                                                            title={`Open ${feature.itemType === 'customer' ? 'Customer' : 'Job'}`}
                                                                         >
-                                                                            <Mail className="h-3 w-3" />
+                                                                            <Eye className="h-3 w-3" />
                                                                         </Button>
-                                                                    )}
 
-                                                                    {/* Only show schedule if measure/delivery stages */}
-                                                                    {(feature.stage === 'Survey' || feature.stage === 'Installation' || feature.stage === 'Delivery') && (
-                                                                        <Button
-                                                                            size="sm"
-                                                                            variant="ghost"
-                                                                            className="h-6 px-1 text-xs flex-1 hover:bg-gray-100"
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                handleSchedule(feature.itemId);
-                                                                            }}
-                                                                            title="Schedule"
-                                                                        >
-                                                                            <Calendar className="h-3 w-3" />
-                                                                        </Button>
-                                                                    )}
+                                                                        {/* Only show quote action if appropriate stage and user has permission */}
+                                                                        {permissions.canSendQuotes && isEditable && (feature.stage === 'Quote' || feature.stage === 'Design' || feature.stage === 'Quoted') && (
+                                                                            <Button
+                                                                                size="sm"
+                                                                                variant="ghost"
+                                                                                className="h-6 px-1 text-xs flex-1 hover:bg-gray-100"
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleSendQuote(feature.itemId);
+                                                                                }}
+                                                                                title="Send Quote"
+                                                                            >
+                                                                                <Mail className="h-3 w-3" />
+                                                                            </Button>
+                                                                        )}
 
-                                                                    {/* Show documents for jobs */}
-                                                                    {feature.itemType === 'job' && (
-                                                                        <Button
-                                                                            size="sm"
-                                                                            variant="ghost"
-                                                                            className="h-6 px-1 text-xs flex-1 hover:bg-gray-100"
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                handleViewDocuments(feature.itemId);
-                                                                            }}
-                                                                            title="View Documents"
-                                                                        >
-                                                                            <File className="h-3 w-3" />
-                                                                        </Button>
-                                                                    )}
+                                                                        {/* Only show schedule if user has permission */}
+                                                                        {permissions.canSchedule && (feature.stage === 'Survey' || feature.stage === 'Installation' || feature.stage === 'Delivery') && (
+                                                                            <Button
+                                                                                size="sm"
+                                                                                variant="ghost"
+                                                                                className="h-6 px-1 text-xs flex-1 hover:bg-gray-100"
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleSchedule(feature.itemId);
+                                                                                }}
+                                                                                title="Schedule"
+                                                                            >
+                                                                                <Calendar className="h-3 w-3" />
+                                                                            </Button>
+                                                                        )}
+
+                                                                        {/* Show documents for jobs */}
+                                                                        {feature.itemType === 'job' && (
+                                                                            <Button
+                                                                                size="sm"
+                                                                                variant="ghost"
+                                                                                className="h-6 px-1 text-xs flex-1 hover:bg-gray-100"
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleViewDocuments(feature.itemId);
+                                                                                }}
+                                                                                title="View Documents"
+                                                                            >
+                                                                                <File className="h-3 w-3" />
+                                                                            </Button>
+                                                                        )}
+                                                                    </div>
+
                                                                 </div>
-
-                                                            </div>
-                                                        </KanbanCard>
-                                                    )}
+                                                            </KanbanCard>
+                                                        );
+                                                    }}
                                                 </KanbanCards>
                                             </KanbanBoard>
                                         </div>
@@ -1247,147 +1408,161 @@ export default function EnhancedPipelinePage() {
                             <div>Job Type</div>
                             <div>Salesperson</div>
                             <div>Stage</div>
-                            <div>Quote Price</div>
-                            <div>Sold Amount</div>
+                            {permissions.canViewFinancials && (
+                                <>
+                                    <div>Quote Price</div>
+                                    <div>Sold Amount</div>
+                                </>
+                            )}
                             <div>Contact Made</div>
                             <div>Measure Date</div>
                             <div>Actions</div>
                         </div>
 
                         {/* Table Rows */}
-                        {filteredListItems.map((item) => (
-                            <Card key={item.id} className="p-4 hover:shadow-md transition-shadow">
-                                <div className="grid grid-cols-12 gap-4 items-center text-sm">
-                                    <div>
-                                        <Badge variant={item.type === 'customer' ? 'secondary' : 'default'} className="text-xs">
-                                            {item.type === 'customer' ? 'Customer' : 'Job'}
-                                        </Badge>
-                                    </div>
-                                    <div className="font-medium">{item.reference}</div>
-                                    <div className="col-span-2">
-                                        <button
-                                            className="font-medium text-blue-600 hover:underline cursor-pointer"
-                                            onClick={() => handleOpenCustomer(item.customer.id)}
-                                            title="View Customer Details"
-                                        >
-                                            {item.customer.name}
-                                        </button>
-                                        {item.customer.phone && <div className="text-xs text-muted-foreground">{item.customer.phone}</div>}
-                                        {item.customer.address && <div className="text-xs text-muted-foreground truncate">{item.customer.address}</div>}
-                                    </div>
-                                    <div>
-                                        {item.jobType && <Badge variant="outline">{item.jobType}</Badge>}
-                                    </div>
-                                    <div>{item.salesperson}</div>
-                                    <div>
-                                        <Badge style={{ backgroundColor: stageColors[item.stage], color: "white" }}>
-                                            {item.stage}
-                                        </Badge>
-                                    </div>
-                                    <div>{item.quotePrice ? `$${item.quotePrice.toFixed(2)}` : 'N/A'}</div>
-                                    <div>{item.soldAmount ? `$${item.soldAmount.toFixed(2)}` : 'N/A'}</div>
-                                    <div>
-                                        <Badge variant={item.customer.contact_made === "Yes" ? "secondary" : "destructive"}>
-                                            {item.customer.contact_made}
-                                        </Badge>
-                                    </div>
-                                    <div>{formatDate(item.measureDate)}</div>
-                                    <div>
-                                        <DropdownMenu>
-                                            <DropdownMenuTrigger asChild>
-                                                <Button variant="ghost" className="h-8 w-8 p-0">
-                                                    <MoreHorizontal className="h-4 w-4" />
-                                                </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                                <DropdownMenuItem onClick={() => handleOpenItem(item.id, item.type)}>
-                                                    <Eye className="h-4 w-4 mr-2" />
-                                                    Open {item.type === 'customer' ? 'Customer' : 'Job'}
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem onClick={() => handleOpenCustomer(item.customer.id)}>
-                                                    <Users className="h-4 w-4 mr-2" />
-                                                    View Customer
-                                                </DropdownMenuItem>
-                                                {/* Conditional menu items based on stage */}
-                                                {(item.stage === 'Quote' || item.stage === 'Design' || item.stage === 'Quoted') && (
-                                                    <DropdownMenuItem onClick={() => handleSendQuote(item.id)}>
-                                                        <Mail className="h-4 w-4 mr-2" />
-                                                        Send Quote
-                                                    </DropdownMenuItem>
-                                                )}
-                                                {(item.stage === 'Survey' || item.stage === 'Installation' || item.stage === 'Delivery') && (
-                                                    <DropdownMenuItem onClick={() => handleSchedule(item.id)}>
-                                                        <Calendar className="h-4 w-4 mr-2" />
-                                                        Schedule
-                                                    </DropdownMenuItem>
-                                                )}
-                                                {item.type === 'job' && (
-                                                    <DropdownMenuItem onClick={() => handleViewDocuments(item.id)}>
-                                                        <File className="h-4 w-4 mr-2" />
-                                                        View Documents
-                                                    </DropdownMenuItem>
-                                                )}
-                                                {item.stage !== "Accepted" && item.stage !== "Complete" && (
-                                                    <DropdownMenuItem onClick={() => setEditDialog({
-                                                        open: true,
-                                                        itemId: item.id,
-                                                        newStage: "Accepted",
-                                                        itemType: item.type
-                                                    })}>
-                                                        <Check className="h-4 w-4 mr-2" />
-                                                        Mark Accepted
-                                                    </DropdownMenuItem>
-                                                )}
-                                            </DropdownMenuContent>
-                                        </DropdownMenu>
-                                    </div>
-                                </div>
+                        {filteredListItems.map((item) => {
+                            const isEditable = canUserEditItem(item);
 
-                                {/* Additional Details */}
-                                {(item.customer.email || item.customer.notes || (item.job && item.job.notes) || item.deposit1 || item.deposit2) && (
-                                    <div className="mt-3 pt-3 border-t text-xs text-muted-foreground">
-                                        <div className="space-y-1">
-                                            {item.customer.email && (
-                                                <div>
-                                                    <span className="font-medium">Email: </span>
-                                                    {item.customer.email}
-                                                </div>
-                                            )}
-                                            {(item.customer.notes || (item.job && item.job.notes)) && (
-                                                <div>
-                                                    <span className="font-medium">Notes: </span>
-                                                    {item.job?.notes || item.customer.notes}
-                                                </div>
-                                            )}
-                                            {(item.deposit1 || item.deposit2) && (
-                                                <div className="flex gap-4">
-                                                    {item.deposit1 && (
-                                                        <div className="flex items-center gap-2">
-                                                            <div
-                                                                className={`h-2 w-2 rounded-full ${item.deposit1Paid ? "bg-green-500" : "bg-red-500"}`}
-                                                            />
-                                                            <span className={item.deposit1Paid ? "text-green-600" : "text-red-600"}>
-                                                                Deposit 1: ${item.deposit1.toFixed(2)} ({item.deposit1Paid ? "Paid" : "Unpaid"})
-                                                            </span>
-                                                        </div>
+                            return (
+                                <Card key={item.id} className={`p-4 hover:shadow-md transition-shadow ${!isEditable ? 'opacity-90' : ''}`}>
+                                    <div className="grid grid-cols-12 gap-4 items-center text-sm">
+                                        <div className="flex items-center gap-2">
+                                            <Badge variant={item.type === 'customer' ? 'secondary' : 'default'} className="text-xs">
+                                                {item.type === 'customer' ? 'Customer' : 'Job'}
+                                            </Badge>
+                                            {!isEditable && <Lock className="h-3 w-3 text-gray-400" />}
+                                        </div>
+                                        <div className="font-medium">{item.reference}</div>
+                                        <div className="col-span-2">
+                                            <button
+                                                className="font-medium text-blue-600 hover:underline cursor-pointer"
+                                                onClick={() => handleOpenCustomer(item.customer.id)}
+                                                title="View Customer Details"
+                                            >
+                                                {item.customer.name}
+                                            </button>
+                                            {item.customer.phone && <div className="text-xs text-muted-foreground">{item.customer.phone}</div>}
+                                            {item.customer.address && <div className="text-xs text-muted-foreground truncate">{item.customer.address}</div>}
+                                        </div>
+                                        <div>
+                                            {item.jobType && <Badge variant="outline">{item.jobType}</Badge>}
+                                        </div>
+                                        <div>{item.salesperson}</div>
+                                        <div>
+                                            <Badge style={{ backgroundColor: stageColors[item.stage], color: "white" }}>
+                                                {item.stage}
+                                            </Badge>
+                                        </div>
+                                        {permissions.canViewFinancials ? (
+                                            <>
+                                                <div>{item.quotePrice ? `£${item.quotePrice.toFixed(2)}` : 'N/A'}</div>
+                                                <div>{item.soldAmount ? `£${item.soldAmount.toFixed(2)}` : 'N/A'}</div>
+                                            </>
+                                        ) : (
+                                            <>
+                                                {/* Spacers for Production staff who can't see financials */}
+                                                <div className="col-span-2"></div>
+                                            </>
+                                        )}
+                                        <div>
+                                            <Badge variant={item.customer.contact_made === "Yes" ? "secondary" : "destructive"}>
+                                                {item.customer.contact_made}
+                                            </Badge>
+                                        </div>
+                                        <div>{formatDate(item.measureDate)}</div>
+                                        <div>
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" className="h-8 w-8 p-0">
+                                                        <MoreHorizontal className="h-4 w-4" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem onClick={() => handleOpenItem(item.id, item.type)}>
+                                                        <Eye className="h-4 w-4 mr-2" />
+                                                        Open {item.type === 'customer' ? 'Customer' : 'Job'}
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuItem onClick={() => handleOpenCustomer(item.customer.id)}>
+                                                        <Users className="h-4 w-4 mr-2" />
+                                                        View Customer
+                                                    </DropdownMenuItem>
+                                                    {/* Conditional menu items based on permissions and stage */}
+                                                    {permissions.canSendQuotes && isEditable && (item.stage === 'Quote' || item.stage === 'Design' || item.stage === 'Quoted') && (
+                                                        <DropdownMenuItem onClick={() => handleSendQuote(item.id)}>
+                                                            <Mail className="h-4 w-4 mr-2" />
+                                                            Send Quote
+                                                        </DropdownMenuItem>
                                                     )}
-                                                    {item.deposit2 && (
-                                                        <div className="flex items-center gap-2">
-                                                            <div
-                                                                className={`h-2 w-2 rounded-full ${item.deposit2Paid ? "bg-green-500" : "bg-red-500"}`}
-                                                            />
-                                                            <span className={item.deposit2Paid ? "text-green-600" : "text-red-600"}>
-                                                                Deposit 2: ${item.deposit2.toFixed(2)} ({item.deposit2Paid ? "Paid" : "Unpaid"})
-                                                            </span>
-                                                        </div>
+                                                    {permissions.canSchedule && (item.stage === 'Survey' || item.stage === 'Installation' || item.stage === 'Delivery') && (
+                                                        <DropdownMenuItem onClick={() => handleSchedule(item.id)}>
+                                                            <Calendar className="h-4 w-4 mr-2" />
+                                                            Schedule
+                                                        </DropdownMenuItem>
                                                     )}
-                                                </div>
-                                            )}
+                                                    {item.type === 'job' && (
+                                                        <DropdownMenuItem onClick={() => handleViewDocuments(item.id)}>
+                                                            <File className="h-4 w-4 mr-2" />
+                                                            View Documents
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {permissions.canEdit && isEditable && item.stage !== "Accepted" && item.stage !== "Complete" && (
+                                                        <DropdownMenuItem onClick={() => setEditDialog({
+                                                            open: true,
+                                                            itemId: item.id,
+                                                            newStage: "Accepted",
+                                                            itemType: item.type
+                                                        })}>
+                                                            <Check className="h-4 w-4 mr-2" />
+                                                            Mark Accepted
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
                                         </div>
                                     </div>
-                                )}
-                            </Card>
-                        ))}
+
+                                    {/* Additional Details */}
+                                    {(item.customer.email || (permissions.canViewFinancials && (item.deposit1 || item.deposit2))) && (
+                                        <div className="mt-3 pt-3 border-t text-xs text-muted-foreground">
+                                            <div className="space-y-1">
+                                                {item.customer.email && (
+                                                    <div>
+                                                        <span className="font-medium">Email: </span>
+                                                        {item.customer.email}
+                                                    </div>
+                                                )}
+                                                {/* Removed Notes block from here */}
+                                                
+                                                {permissions.canViewFinancials && (item.deposit1 || item.deposit2) && (
+                                                    <div className="flex gap-4">
+                                                        {item.deposit1 && (
+                                                            <div className="flex items-center gap-2">
+                                                                <div
+                                                                    className={`h-2 w-2 rounded-full ${item.deposit1Paid ? "bg-green-500" : "bg-red-500"}`}
+                                                                />
+                                                                <span className={item.deposit1Paid ? "text-green-600" : "text-red-600"}>
+                                                                    Deposit 1: £{item.deposit1.toFixed(2)} ({item.deposit1Paid ? "Paid" : "Unpaid"})
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                        {item.deposit2 && (
+                                                            <div className="flex items-center gap-2">
+                                                                <div
+                                                                    className={`h-2 w-2 rounded-full ${item.deposit2Paid ? "bg-green-500" : "bg-red-500"}`}
+                                                                />
+                                                                <span className={item.deposit2Paid ? "text-green-600" : "text-red-600"}>
+                                                                    Deposit 2: £{item.deposit2.toFixed(2)} ({item.deposit2Paid ? "Paid" : "Unpaid"})
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </Card>
+                            );
+                        })}
 
                         {/* Empty state */}
                         {filteredListItems.length === 0 && (
@@ -1395,12 +1570,19 @@ export default function EnhancedPipelinePage() {
                                 <div className="text-muted-foreground">
                                     <Briefcase className="h-12 w-12 mx-auto mb-4 opacity-50" />
                                     <h3 className="text-lg font-medium mb-2">No items found</h3>
-                                    <p>Try adjusting your search criteria or filters.</p>
+                                    <p>
+                                        {userRole === "Sales" 
+                                            ? "You have no assigned customers or leads. Try creating one to see it appear, or check your filters."
+                                            : userRole === "Production"
+                                            ? "No jobs are currently in production stages."
+                                            : "Try adjusting your search criteria or filters."
+                                        }
+                                    </p>
                                     <div className="mt-4 space-x-2">
-                                        {user?.role !== "Staff" && (
-                                            <Button variant="outline" size="sm" onClick={handleCreateJob}>
-                                                <Plus className="h-4 w-4 mr-2" />
-                                                Create New Job
+                                        {permissions.canCreate && (
+                                            <Button variant="outline" size="sm" onClick={handleCreateCustomer}>
+                                                <UserPlus className="h-4 w-4 mr-2" />
+                                                Create New Customer (Lead)
                                             </Button>
                                         )}
                                     </div>
@@ -1419,7 +1601,7 @@ export default function EnhancedPipelinePage() {
                     </DialogHeader>
                     <div className="space-y-4">
                         <p>
-                            Are you sure you want to change the {editDialog.itemType} stage to **{editDialog.newStage}**?
+                            Are you sure you want to change the {editDialog.itemType} stage to <strong>{editDialog.newStage}</strong>?
                         </p>
                         <Input
                             placeholder="Reason for change"
@@ -1453,6 +1635,9 @@ export default function EnhancedPipelinePage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* KPI Summary (Removed entire block as per request) */}
+            
         </div>
     );
 }

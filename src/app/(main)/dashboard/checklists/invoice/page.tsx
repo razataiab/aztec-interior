@@ -14,30 +14,45 @@ interface CurrencyInputProps {
     placeholder?: string;
 }
 
-// A reusable, controlled input for currency values.
+// A reusable, controlled input for currency values (same as previous response).
 const CurrencyInput: React.FC<CurrencyInputProps> = ({ value, onChange, placeholder = "0.00" }) => {
-    // Error 7031: Binding element 'value' implicitly has an 'any' type. (Fixed by adding CurrencyInputProps interface)
-    // Error 7031: Binding element 'onChange' implicitly has an 'any' type. (Fixed by adding CurrencyInputProps interface)
     const [localValue, setLocalValue] = useState(value);
 
     useEffect(() => {
-        const floatValue = parseFloat(value);
-        setLocalValue(isNaN(floatValue) ? "0.00" : floatValue.toFixed(2));
+        setLocalValue(value);
     }, [value]);
 
-    // Error 7006: Parameter 'e' implicitly has an 'any' type. (Fixed by explicitly typing 'e' as ChangeEvent<HTMLInputElement>)
-    const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-        const cleanValue = e.target.value.replace(/[^0-9.]/g, '');
-        setLocalValue(cleanValue);
-        // Pass the raw value up for immediate calculation
-        onChange(cleanValue);
+    const handleFocus = (e: FocusEvent<HTMLInputElement>) => {
+        if (localValue === "0.00") {
+            setLocalValue('');
+        } else {
+            e.target.select();
+        }
     };
 
-    const handleBlur = () => {
-        const num = parseFloat(localValue);
-        const formatted = isNaN(num) ? "0.00" : num.toFixed(2);
+    const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+        let cleanValue = e.target.value.replace(/[^0-9.]/g, '');
+        const decimalCount = (cleanValue.match(/\./g) || []).length;
+        
+        if (decimalCount > 1) {
+            return;
+        }
+
+        setLocalValue(cleanValue);
+        onChange(cleanValue);
+    };
+    
+    const handleBlur = (e: FocusEvent<HTMLInputElement>) => {
+        let finalValue = e.target.value;
+        let num = parseFloat(finalValue);
+
+        if (isNaN(num) || finalValue.trim() === '' || finalValue.trim() === '.') {
+            num = 0;
+        }
+
+        const formatted = num.toFixed(2);
         setLocalValue(formatted);
-        onChange(formatted); // Pass the formatted value up on blur
+        onChange(formatted);
     };
 
     return (
@@ -45,6 +60,7 @@ const CurrencyInput: React.FC<CurrencyInputProps> = ({ value, onChange, placehol
             type="text"
             value={localValue}
             onChange={handleChange}
+            onFocus={handleFocus}
             onBlur={handleBlur}
             placeholder={placeholder}
             className="text-right font-mono bg-transparent border-0 focus:ring-0"
@@ -52,10 +68,36 @@ const CurrencyInput: React.FC<CurrencyInputProps> = ({ value, onChange, placehol
     );
 };
 
+// 🌟 NEW HELPER FUNCTION for auto-incrementing the invoice number
+const getNextInvoiceNumber = (lastNumber: string): string => {
+    // Expects a format like "INV-0001"
+    const prefix = lastNumber.split('-')[0] + '-';
+    // Safely parse the number part (defaults to 0 if parsing fails)
+    const numPart = parseInt(lastNumber.split('-')[1] || '0', 10);
+    const nextNum = numPart + 1;
+    
+    // Format the number part with leading zeros (e.g., 1 -> 0001)
+    return prefix + nextNum.toString().padStart(4, '0');
+};
+
 // Main Invoice Page Component
 export default function InvoicePage() {
-    // --- Core Invoice State ---
+    // 🌟 Invoice Number State and Initialization Logic
     const [invoiceNumber, setInvoiceNumber] = useState("INV-0001");
+
+    // Load and set the next available invoice number on component mount
+    useEffect(() => {
+        // This runs only on the client side
+        if (typeof window !== 'undefined') {
+            // Retrieve the last saved number from local storage (or default to INV-0000)
+            const lastUsedNumber = localStorage.getItem('lastInvoiceNumber') || "INV-0000";
+            
+            const nextNumber = getNextInvoiceNumber(lastUsedNumber);
+            setInvoiceNumber(nextNumber);
+        }
+    }, []); 
+
+    // --- Core Invoice State ---
     const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
     const [dueDate, setDueDate] = useState(() => {
         const date = new Date();
@@ -72,8 +114,6 @@ export default function InvoicePage() {
     });
 
     useEffect(() => {
-        // Use standard browser APIs to get URL search parameters
-        // This is safe to run because this component is marked "use client"
         if (typeof window !== 'undefined') {
             const params = new URLSearchParams(window.location.search);
             setCustomer({
@@ -93,8 +133,8 @@ export default function InvoicePage() {
     const [vatRate, setVatRate] = useState(20.00); // Default VAT rate of 20%
 
     // --- Calculated Totals ---
-    const subTotal = items.reduce((acc, item) => acc + parseFloat(item.amount || '0'), 0); // Use '0' as fallback for safety
-    const vatAmount = subTotal * (parseFloat(vatRate.toString()) / 100); // vatRate is a number, converting to string and back for consistency with `parseFloat`
+    const subTotal = items.reduce((acc, item) => acc + parseFloat(item.amount || '0'), 0); 
+    const vatAmount = subTotal * (parseFloat(vatRate.toString()) / 100); 
     const totalAmount = subTotal + vatAmount;
 
     // --- UI State ---
@@ -129,7 +169,6 @@ export default function InvoicePage() {
         invoiceNumber,
         invoiceDate,
         dueDate,
-        // Ensure amount is a number for the API
         items: items.map(item => ({...item, amount: parseFloat(item.amount) })),
         vatRate: parseFloat(vatRate.toString()),
         subTotal,
@@ -138,6 +177,7 @@ export default function InvoicePage() {
     }), [customer, invoiceNumber, invoiceDate, dueDate, items, vatRate, subTotal, vatAmount, totalAmount]);
 
 
+    // 🌟 UPDATED: Handle Save to persist the new invoice number
     const handleSave = async () => {
         setIsSaving(true);
         setMessage("Saving invoice...");
@@ -150,7 +190,11 @@ export default function InvoicePage() {
             });
 
             if (response.ok) {
-                setMessage('✅ Invoice saved successfully!');
+                // SUCCESS: Save the currently used invoice number to local storage
+                if (typeof window !== 'undefined') {
+                    localStorage.setItem('lastInvoiceNumber', invoiceNumber);
+                }
+                setMessage('✅ Invoice saved successfully! Next invoice number reserved.');
             } else {
                 const error = await response.json();
                 setMessage(`❌ Error: ${error.error || 'Failed to save invoice.'}`);
@@ -224,11 +268,10 @@ export default function InvoicePage() {
             {/* --- Status Message --- */}
             {message && (
                 <div className={`mb-4 p-3 rounded-md text-sm font-medium ${
-                    // Using neutral colors for status messages
                     message.startsWith("✅") ? "bg-green-100 text-green-800" :
                     message.startsWith("❌") ? "bg-red-100 text-red-800" :
-                    "bg-gray-200 text-gray-800" // Changed blue to a gray for theme
-                  } no-print transition-opacity duration-300`}>
+                    "bg-gray-200 text-gray-800"
+                } no-print transition-opacity duration-300`}>
                     {message}
                 </div>
             )}
@@ -238,7 +281,7 @@ export default function InvoicePage() {
                 <CardHeader className="bg-slate-800 text-white p-8 rounded-t-xl">
                     <div className="flex justify-between items-start">
                         <div>
-                            {/*  */}
+                            {/* */}
                             <img src="/images/logo2.png" alt="Aztec Interiors Logo" className="h-16 mb-2" style={{ filter: 'brightness(0) invert(1)' }}/>
                             <h1 className="text-3xl font-bold tracking-tight">INVOICE</h1>
                         </div>
@@ -246,8 +289,9 @@ export default function InvoicePage() {
                             <p className="text-sm text-slate-300">Invoice #</p>
                             <Input
                                 value={invoiceNumber}
-                                onChange={(e) => setInvoiceNumber(e.target.value.toUpperCase())}
-                                className="bg-transparent border-slate-600 focus:border-white text-2xl font-semibold w-48 text-right p-1"
+                                // 🌟 Prevent manual editing of the auto-generated number
+                                readOnly
+                                className="bg-transparent border-slate-600 focus:border-white text-2xl font-semibold w-48 text-right p-1 cursor-default"
                             />
                         </div>
                     </div>
@@ -282,7 +326,7 @@ export default function InvoicePage() {
                     </div>
 
 
-                    {/* --- Items Table --- */}
+                    {/* --- Items Table (Uses CurrencyInput with receipt logic) --- */}
                     <div>
                         <table className="w-full">
                             <thead className="border-b-2 border-gray-200">
@@ -322,7 +366,6 @@ export default function InvoicePage() {
                             </tbody>
                         </table>
                         <div className="mt-4 no-print">
-                            {/* Changed color from text-blue-600 to text-slate-600 to match theme */}
                             <Button variant="outline" onClick={addItem} className="text-slate-600 hover:bg-gray-100"> 
                                 <PlusCircle className="h-4 w-4 mr-2" /> Add Item
                             </Button>
@@ -342,7 +385,7 @@ export default function InvoicePage() {
                                     <Input
                                         type="number"
                                         value={vatRate}
-                                        onChange={(e) => setVatRate(parseFloat(e.target.value))} // Ensure vatRate state is a number
+                                        onChange={(e) => setVatRate(parseFloat(e.target.value))} 
                                         className="text-right bg-gray-100 rounded-md p-1 font-mono w-16"
                                     />
                                     <span className="ml-1">%</span>
@@ -387,7 +430,7 @@ export default function InvoicePage() {
             }
             /* Simple focus rings for better accessibility, changed blue to a darker gray for theme */
             *:focus-visible {
-                outline: 2px solid #374151 !important; /* A dark gray/slate */
+                outline: 2px solid #374151 !important; 
                 outline-offset: 2px;
                 border-radius: 4px;
             }
