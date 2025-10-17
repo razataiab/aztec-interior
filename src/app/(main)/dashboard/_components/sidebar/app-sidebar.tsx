@@ -3,7 +3,6 @@
 import { Settings, CircleHelp, Search, Database, ClipboardList, File, Command } from "lucide-react";
 import Image from "next/image";
 
-
 import {
   Sidebar,
   SidebarContent,
@@ -15,7 +14,7 @@ import {
 } from "@/components/ui/sidebar";
 import { APP_CONFIG } from "@/config/app-config";
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { sidebarItems } from "@/navigation/sidebar/sidebar-items";
+import { getSidebarItems } from "@/navigation/sidebar/sidebar-items";
 
 import { NavMain } from "./nav-main";
 import { NavUser } from "./nav-user";
@@ -60,24 +59,34 @@ const data = {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const currentUser = useCurrentUser();
   
-  if (!currentUser) return null; // or loading state
+  if (!currentUser) return null;
+
+  // ✅ Debug: Log the user role
+  console.log("Current user role:", currentUser.role);
+  console.log("Full user object:", currentUser);
+
+  // ✅ Get filtered sidebar items - with fallback to show all if role doesn't match
+  const userRole = currentUser.role?.toLowerCase();
+  const sidebarItems = getSidebarItems(userRole);
+  
+  console.log("Filtered sidebar items:", sidebarItems);
+  
   return (
     <Sidebar {...props}>
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-          <SidebarMenuButton asChild className="flex items-center gap-1.5 px-2">
-  <a href="#">
-    <Image
-      src="/images/file2.svg"
-      alt="Logo"
-      width={35}
-      height={35}
-    />
-    <span className="text-base font-semibold">{APP_CONFIG.name}</span>
-  </a>
-</SidebarMenuButton>
-
+            <SidebarMenuButton asChild className="flex items-center gap-1.5 px-2">
+              <a href="#">
+                <Image
+                  src="/images/file2.svg"
+                  alt="Logo"
+                  width={35}
+                  height={35}
+                />
+                <span className="text-base font-semibold">{APP_CONFIG.name}</span>
+              </a>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

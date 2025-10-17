@@ -1,20 +1,18 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, ChangeEvent, FocusEvent } from "react";
-import { ArrowLeft, Printer, Save, Download, PlusCircle, Trash2 } from "lucide-react";
+import { ArrowLeft, Printer, Save, Download, PlusCircle, Trash2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 
-// Define the shape of the CurrencyInput's props
 interface CurrencyInputProps {
     value: string;
     onChange: (value: string) => void;
     placeholder?: string;
 }
 
-// A reusable, controlled input for currency values (same as previous response).
 const CurrencyInput: React.FC<CurrencyInputProps> = ({ value, onChange, placeholder = "0.00" }) => {
     const [localValue, setLocalValue] = useState(value);
 
@@ -68,44 +66,34 @@ const CurrencyInput: React.FC<CurrencyInputProps> = ({ value, onChange, placehol
     );
 };
 
-// 🌟 NEW HELPER FUNCTION for auto-incrementing the invoice number
 const getNextInvoiceNumber = (lastNumber: string): string => {
-    // Expects a format like "INV-0001"
     const prefix = lastNumber.split('-')[0] + '-';
-    // Safely parse the number part (defaults to 0 if parsing fails)
     const numPart = parseInt(lastNumber.split('-')[1] || '0', 10);
     const nextNum = numPart + 1;
-    
-    // Format the number part with leading zeros (e.g., 1 -> 0001)
     return prefix + nextNum.toString().padStart(4, '0');
 };
 
-// Main Invoice Page Component
 export default function InvoicePage() {
-    // 🌟 Invoice Number State and Initialization Logic
     const [invoiceNumber, setInvoiceNumber] = useState("INV-0001");
+    const [submissionId, setSubmissionId] = useState<number | null>(null);
+    const [approvalStatus, setApprovalStatus] = useState<string>('pending');
+    const [rejectionReason, setRejectionReason] = useState<string>('');
 
-    // Load and set the next available invoice number on component mount
     useEffect(() => {
-        // This runs only on the client side
         if (typeof window !== 'undefined') {
-            // Retrieve the last saved number from local storage (or default to INV-0000)
             const lastUsedNumber = localStorage.getItem('lastInvoiceNumber') || "INV-0000";
-            
             const nextNumber = getNextInvoiceNumber(lastUsedNumber);
             setInvoiceNumber(nextNumber);
         }
     }, []); 
 
-    // --- Core Invoice State ---
     const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
     const [dueDate, setDueDate] = useState(() => {
         const date = new Date();
-        date.setDate(date.getDate() + 30); // Default due date 30 days from now
+        date.setDate(date.getDate() + 30);
         return date.toISOString().split('T')[0];
     });
 
-    // --- Customer State ---
     const [customer, setCustomer] = useState({
         id: "",
         name: "",
@@ -125,23 +113,19 @@ export default function InvoicePage() {
         }
     }, []);
 
-    // --- Line Items State ---
     const [items, setItems] = useState([{
         description: "",
         amount: "0.00"
-    }, ]);
-    const [vatRate, setVatRate] = useState(20.00); // Default VAT rate of 20%
+    }]);
+    const [vatRate, setVatRate] = useState(20.00);
 
-    // --- Calculated Totals ---
     const subTotal = items.reduce((acc, item) => acc + parseFloat(item.amount || '0'), 0); 
     const vatAmount = subTotal * (parseFloat(vatRate.toString()) / 100); 
     const totalAmount = subTotal + vatAmount;
 
-    // --- UI State ---
     const [isSaving, setIsSaving] = useState(false);
     const [message, setMessage] = useState("");
 
-    // --- Item Handlers ---
     const handleItemChange = (index: number, field: keyof typeof items[0], value: string) => {
         const newItems = [...items];
         newItems[index] = { ...newItems[index], [field]: value };
@@ -160,7 +144,6 @@ export default function InvoicePage() {
         setItems(newItems);
     };
 
-    // --- Data Preparation and API Calls ---
     const getInvoiceData = useCallback(() => ({
         customerId: customer.id,
         customerName: customer.name,
@@ -174,30 +157,50 @@ export default function InvoicePage() {
         subTotal,
         vatAmount,
         totalAmount,
-    }), [customer, invoiceNumber, invoiceDate, dueDate, items, vatRate, subTotal, vatAmount, totalAmount]);
+        submission_id: submissionId, // Include for download check
+    }), [customer, invoiceNumber, invoiceDate, dueDate, items, vatRate, subTotal, vatAmount, totalAmount, submissionId]);
 
-
-    // 🌟 UPDATED: Handle Save to persist the new invoice number
     const handleSave = async () => {
         setIsSaving(true);
         setMessage("Saving invoice...");
 
         try {
+            // Get the token from localStorage with the correct key
+            const token = localStorage.getItem('auth_token');
+            
+            if (!token) {
+                setMessage('❌ You must be logged in to save invoices.');
+                setIsSaving(false);
+                return;
+            }
+
             const response = await fetch('http://127.0.0.1:5000/invoices/save', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}` // Add the token here
+                },
                 body: JSON.stringify(getInvoiceData()),
             });
 
+            const data = await response.json();
+
             if (response.ok) {
-                // SUCCESS: Save the currently used invoice number to local storage
                 if (typeof window !== 'undefined') {
                     localStorage.setItem('lastInvoiceNumber', invoiceNumber);
                 }
-                setMessage('✅ Invoice saved successfully! Next invoice number reserved.');
+                
+                // Store submission ID and approval status
+                setSubmissionId(data.form_submission_id);
+                setApprovalStatus(data.approval_status || 'pending');
+                
+                if (data.approval_status === 'pending') {
+                    setMessage('✅ Invoice saved and sent to manager for approval!');
+                } else {
+                    setMessage('✅ Invoice saved successfully!');
+                }
             } else {
-                const error = await response.json();
-                setMessage(`❌ Error: ${error.error || 'Failed to save invoice.'}`);
+                setMessage(`❌ Error: ${data.error || 'Failed to save invoice.'}`);
             }
         } catch (error) {
             setMessage('❌ Network error. Could not connect to server.');
@@ -206,8 +209,44 @@ export default function InvoicePage() {
             setTimeout(() => setMessage(""), 5000);
         }
     };
+
+    // Check approval status before download
+    const checkApprovalStatus = async () => {
+        if (!submissionId) {
+            setMessage('⚠️ Please save the invoice first.');
+            return false;
+        }
+
+        try {
+            const response = await fetch(`http://127.0.0.1:5000/approvals/status/${submissionId}`);
+            const data = await response.json();
+            
+            setApprovalStatus(data.approval_status);
+            setRejectionReason(data.rejection_reason || '');
+
+            if (data.approval_status === 'rejected') {
+                setMessage(`❌ This invoice was rejected. Reason: ${data.rejection_reason}`);
+                return false;
+            } else if (data.approval_status === 'pending') {
+                setMessage('⚠️ This invoice is pending manager approval. You cannot download it yet.');
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            setMessage('❌ Failed to check approval status.');
+            return false;
+        }
+    };
     
     const handleDownloadPdf = async () => {
+        // Check approval status first
+        const canDownload = await checkApprovalStatus();
+        if (!canDownload) {
+            setTimeout(() => setMessage(""), 5000);
+            return;
+        }
+
         setMessage("Generating PDF...");
         try {
             const response = await fetch('http://127.0.0.1:5000/invoices/download-pdf', {
@@ -239,7 +278,6 @@ export default function InvoicePage() {
         }
     };
 
-
     const handlePrint = () => {
         window.print();
     };
@@ -247,7 +285,6 @@ export default function InvoicePage() {
     return (
         <div className="bg-gray-50 min-h-screen p-4 sm:p-8 font-sans">
         <div className="max-w-5xl mx-auto">
-            {/* --- Header Actions --- */}
             <div className="flex justify-between items-center mb-6 no-print">
                 <Button variant="outline" onClick={() => window.history.back()}>
                     <ArrowLeft className="h-4 w-4 mr-2" /> Back
@@ -265,23 +302,47 @@ export default function InvoicePage() {
                 </div>
             </div>
 
-            {/* --- Status Message --- */}
+            {/* Approval Status Badge */}
+            {submissionId && (
+                <div className={`mb-4 p-3 rounded-lg border-l-4 ${
+                    approvalStatus === 'approved' ? 'bg-green-50 border-green-500' :
+                    approvalStatus === 'rejected' ? 'bg-red-50 border-red-500' :
+                    'bg-yellow-50 border-yellow-500'
+                } no-print`}>
+                    <div className="flex items-center">
+                        <AlertCircle className={`h-5 w-5 mr-2 ${
+                            approvalStatus === 'approved' ? 'text-green-600' :
+                            approvalStatus === 'rejected' ? 'text-red-600' :
+                            'text-yellow-600'
+                        }`} />
+                        <span className="font-medium">
+                            Status: <span className="capitalize">{approvalStatus}</span>
+                        </span>
+                    </div>
+                    {approvalStatus === 'rejected' && rejectionReason && (
+                        <p className="text-sm text-red-700 mt-1 ml-7">Reason: {rejectionReason}</p>
+                    )}
+                    {approvalStatus === 'pending' && (
+                        <p className="text-sm text-yellow-700 mt-1 ml-7">Waiting for manager approval before PDF download is available.</p>
+                    )}
+                </div>
+            )}
+
             {message && (
                 <div className={`mb-4 p-3 rounded-md text-sm font-medium ${
                     message.startsWith("✅") ? "bg-green-100 text-green-800" :
                     message.startsWith("❌") ? "bg-red-100 text-red-800" :
+                    message.startsWith("⚠️") ? "bg-yellow-100 text-yellow-800" :
                     "bg-gray-200 text-gray-800"
                 } no-print transition-opacity duration-300`}>
                     {message}
                 </div>
             )}
 
-            {/* --- Invoice Card --- */}
             <Card className="shadow-lg rounded-xl print:shadow-none print:border-0">
                 <CardHeader className="bg-slate-800 text-white p-8 rounded-t-xl">
                     <div className="flex justify-between items-start">
                         <div>
-                            {/* */}
                             <img src="/images/logo2.png" alt="Aztec Interiors Logo" className="h-16 mb-2" style={{ filter: 'brightness(0) invert(1)' }}/>
                             <h1 className="text-3xl font-bold tracking-tight">INVOICE</h1>
                         </div>
@@ -289,7 +350,6 @@ export default function InvoicePage() {
                             <p className="text-sm text-slate-300">Invoice #</p>
                             <Input
                                 value={invoiceNumber}
-                                // 🌟 Prevent manual editing of the auto-generated number
                                 readOnly
                                 className="bg-transparent border-slate-600 focus:border-white text-2xl font-semibold w-48 text-right p-1 cursor-default"
                             />
@@ -297,7 +357,6 @@ export default function InvoicePage() {
                     </div>
                 </CardHeader>
                 <CardContent className="p-8 md:p-10 space-y-10">
-                    {/* --- Company / Customer Info --- */}
                     <div className="grid md:grid-cols-2 gap-8">
                         <div>
                             <h2 className="text-sm font-semibold uppercase text-gray-500 mb-2">From</h2>
@@ -313,7 +372,6 @@ export default function InvoicePage() {
                         </div>
                     </div>
 
-                    {/* --- Dates --- */}
                     <div className="flex justify-end space-x-8">
                         <div className="text-right">
                             <label className="text-sm font-semibold text-gray-500 block">Invoice Date</label>
@@ -325,8 +383,6 @@ export default function InvoicePage() {
                         </div>
                     </div>
 
-
-                    {/* --- Items Table (Uses CurrencyInput with receipt logic) --- */}
                     <div>
                         <table className="w-full">
                             <thead className="border-b-2 border-gray-200">
@@ -372,7 +428,6 @@ export default function InvoicePage() {
                         </div>
                     </div>
 
-                    {/* --- Totals Section --- */}
                     <div className="flex justify-end">
                         <div className="w-full max-w-sm space-y-3">
                             <div className="flex justify-between items-center">
@@ -428,13 +483,11 @@ export default function InvoicePage() {
                 .print\\:shadow-none { box-shadow: none !important; }
                 .print\\:border-0 { border: 0 !important; }
             }
-            /* Simple focus rings for better accessibility, changed blue to a darker gray for theme */
             *:focus-visible {
                 outline: 2px solid #374151 !important; 
                 outline-offset: 2px;
                 border-radius: 4px;
             }
-            /* Remove number input spinners */
             input[type=number]::-webkit-inner-spin-button, 
             input[type=number]::-webkit-outer-spin-button { 
                 -webkit-appearance: none; 

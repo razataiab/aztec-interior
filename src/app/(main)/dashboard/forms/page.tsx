@@ -73,13 +73,20 @@ const FormsAndChecklistsPage = () => {
     const fetchCustomers = async () => {
         setLoadingCustomers(true);
         try {
-            // NOTE: Assuming the base URL is correct for your Flask backend
-            const response = await fetch("http://127.0.0.1:5000/customers");
+            const token = localStorage.getItem('auth_token');
+            
+            const response = await fetch("http://127.0.0.1:5000/customers", {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
             if (response.ok) {
                 const data = await response.json();
                 setCustomers(data);
             } else {
-                console.error("Failed to fetch customers");
+                const errorData = await response.json().catch(() => ({}));
+                console.error("Failed to fetch customers:", response.status, errorData);
             }
         } catch (error) {
             console.error("Error fetching customers:", error);
@@ -228,7 +235,7 @@ const FormsAndChecklistsPage = () => {
             title: "Documents",
             items: [
                 // NOTE: Assuming these routes handle quote/invoice creation/editing
-                { label: "Quotation", icon: FileText, route: "/dashboard/checklists/invoice", type: "quotation" as const },
+                { label: "Quotation", icon: FileText, route: "/dashboard/checklists/quotes/create", type: "quotation" as const },
                 { label: "Invoice", icon: FileText, route: "/dashboard/checklists/invoice", type: "invoice" as const },
                 { label: "Proforma Invoice", icon: FileText, route: "/dashboard/checklists/invoice", type: "proforma" as const },
                 { label: "Payment Terms", icon: DollarSign, route: "/dashboard/payment-terms/create", type: "terms" as const },

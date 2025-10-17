@@ -146,14 +146,27 @@ export default function CustomersPage() {
     }
   }, [user, allCustomers]);
 
-  const fetchCustomers = () => {
-    fetch("http://127.0.0.1:5000/customers")
-      .then((res) => res.json())
-      .then((data) => {
+  const fetchCustomers = async () => {
+    try {
+      const token = localStorage.getItem('auth_token');
+      
+      const response = await fetch("http://127.0.0.1:5000/customers", {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
         setAllCustomers(data);
-        // Initial set will be filtered by useEffect above
-      })
-      .catch((err) => console.error("Error fetching customers:", err));
+      } else {
+        console.error("Failed to fetch customers:", response.status);
+        setAllCustomers([]); // Set empty array on error
+      }
+    } catch (err) {
+      console.error("Error fetching customers:", err);
+      setAllCustomers([]); // Set empty array on error
+    }
   };
 
   const filteredCustomers = customers.filter((customer) => {
@@ -191,11 +204,17 @@ export default function CustomersPage() {
     if (!confirm("Are you sure you want to delete this customer?")) return;
     
     try {
+      const token = localStorage.getItem('auth_token');
+      
       const res = await fetch(`http://127.0.0.1:5000/customers/${id}`, {
         method: "DELETE",
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       if (!res.ok) throw new Error("Failed to delete customer");
       setCustomers(customers.filter(c => c.id !== id));
+      setAllCustomers(allCustomers.filter(c => c.id !== id));
     } catch (err) {
       console.error("Delete error:", err);
       alert("Error deleting customer");

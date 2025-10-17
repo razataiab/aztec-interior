@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle, AlertCircle } from "lucide-react";
 
 interface QuoteItem {
   id: string;
@@ -19,7 +19,7 @@ interface QuoteItem {
   amount: number;
 }
 
-const VAT_RATE = 0.20; // 20% VAT
+const VAT_RATE = 0.20;
 
 // Success Modal Component
 const SuccessModal = ({ 
@@ -27,13 +27,15 @@ const SuccessModal = ({
   onClose, 
   onDownloadPdf, 
   onGoBack,
-  isDownloading 
+  isDownloading,
+  approvalStatus
 }: {
   isOpen: boolean;
   onClose: () => void;
   onDownloadPdf: () => void;
   onGoBack: () => void;
   isDownloading: boolean;
+  approvalStatus: string;
 }) => {
   if (!isOpen) return null;
 
@@ -43,37 +45,56 @@ const SuccessModal = ({
         <div className="text-center">
           <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-4" />
           <h3 className="text-lg font-semibold text-gray-900 mb-2">
-            Quote Created Successfully!
+            Quote Saved Successfully!
           </h3>
-          <p className="text-gray-600 mb-6">
-            Your quote has been saved. Would you like to download it as a PDF?
-          </p>
+          
+          {approvalStatus === 'pending' ? (
+            <>
+              <p className="text-gray-600 mb-4">
+                Your quote has been saved and sent to the manager for approval.
+              </p>
+              <div className="bg-yellow-50 border-l-4 border-yellow-500 p-3 mb-4 text-left">
+                <div className="flex items-start">
+                  <AlertCircle className="h-5 w-5 text-yellow-600 mr-2 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-yellow-700">
+                    PDF download will be available after manager approval.
+                  </p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-gray-600 mb-6">
+              Would you like to download the quote as a PDF?
+            </p>
+          )}
           
           <div className="flex flex-col space-y-3">
-            <Button 
-              onClick={onDownloadPdf}
-              disabled={isDownloading}
-              className="w-full"
-            >
-              {isDownloading ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Generating PDF...
-                </>
-              ) : (
-                <>
-                  <Download className="h-4 w-4 mr-2" />
-                  Download PDF
-                </>
-              )}
-            </Button>
+            {approvalStatus === 'approved' && (
+              <Button 
+                onClick={onDownloadPdf}
+                disabled={isDownloading}
+                className="w-full"
+              >
+                {isDownloading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Generating PDF...
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-4 w-4 mr-2" />
+                    Download PDF
+                  </>
+                )}
+              </Button>
+            )}
             
             <Button 
               onClick={onGoBack}
-              variant="outline"
+              variant={approvalStatus === 'approved' ? 'outline' : 'default'}
               className="w-full"
             >
-              Go Back
+              {approvalStatus === 'approved' ? 'Go Back' : 'Close'}
             </Button>
           </div>
         </div>
@@ -86,7 +107,6 @@ export default function CreateQuotePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
-  // Form state
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
     name: '',
@@ -112,8 +132,13 @@ export default function CreateQuotePage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [savedQuoteId, setSavedQuoteId] = useState<string | null>(null);
+  
+  // Approval workflow state
+  const [submissionId, setSubmissionId] = useState<number | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<string>('pending');
+  const [rejectionReason, setRejectionReason] = useState<string>('');
+  const [statusMessage, setStatusMessage] = useState<string>('');
 
-  // Auto-populate customer data if coming from customer details page
   useEffect(() => {
     const customerId = searchParams.get('customerId');
     const customerName = searchParams.get('customerName');
@@ -133,7 +158,6 @@ export default function CreateQuotePage() {
     }
   }, [searchParams]);
 
-  // Calculate totals
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0);
   const vatAmount = subtotal * VAT_RATE;
   const total = subtotal + vatAmount;
@@ -151,7 +175,6 @@ export default function CreateQuotePage() {
       if (item.id === id) {
         const updatedItem = { ...item, [field]: value };
         
-        // Recalculate amount when quantity or unitPrice changes
         if (field === 'quantity' || field === 'unitPrice') {
           updatedItem.amount = updatedItem.quantity * updatedItem.unitPrice;
         }
@@ -182,27 +205,25 @@ export default function CreateQuotePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setStatusMessage('');
 
     try {
-      // --- inside handleSubmit, replace the quoteData block with this ---
-const customerId = searchParams.get('customerId');
-if (!customerId) {
-  throw new Error("Customer ID is required to save the quotation");
-}
+      const customerId = searchParams.get('customerId');
+      if (!customerId) {
+        throw new Error("Customer ID is required to save the quotation");
+      }
 
-const quoteData = {
-  // send the UUID string directly (not parseInt)
-  customer_id: customerId,
-  total: Number(total), // ensure it's a Number
-  notes: formData.notes,
-  items: items.map(item => ({
-    item: item.item,
-    description: item.description,
-    color: item.colour,       // backend expects 'color'
-    amount: Number(item.amount) // ensure numeric
-  }))
-};
-
+      const quoteData = {
+        customer_id: customerId,
+        total: Number(total),
+        notes: formData.notes,
+        items: items.map(item => ({
+          item: item.item,
+          description: item.description,
+          color: item.colour,
+          amount: Number(item.amount)
+        }))
+      };
 
       const response = await fetch('http://127.0.0.1:5000/quotations', {
         method: 'POST',
@@ -218,15 +239,63 @@ const quoteData = {
 
       const result = await response.json();
       setSavedQuoteId(result.id);
+      
+      // Store submission ID and approval status if returned
+      if (result.form_submission_id) {
+        setSubmissionId(result.form_submission_id);
+      }
+      setApprovalStatus(result.approval_status || 'approved'); // Quotes might be auto-approved
+      
       setShowSuccessModal(true);
     } catch (error) {
       console.error('Error creating quote:', error);
+      setStatusMessage('❌ Failed to save quote. Please try again.');
+      setTimeout(() => setStatusMessage(''), 5000);
     } finally {
       setLoading(false);
     }
   };
 
+  // Check approval status before download
+  const checkApprovalStatus = async () => {
+    if (!submissionId) {
+      // If no submission ID, quote might not require approval
+      return true;
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:5000/approvals/status/${submissionId}`);
+      const data = await response.json();
+      
+      setApprovalStatus(data.approval_status);
+      setRejectionReason(data.rejection_reason || '');
+
+      if (data.approval_status === 'rejected') {
+        setStatusMessage(`❌ This quote was rejected. Reason: ${data.rejection_reason}`);
+        return false;
+      } else if (data.approval_status === 'pending') {
+        setStatusMessage('⚠️ This quote is pending manager approval. You cannot download it yet.');
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error checking approval status:', error);
+      // If check fails, allow download (might not require approval)
+      return true;
+    }
+  };
+
   const handleDownloadPdf = async () => {
+    // Check approval status first if there's a submission ID
+    if (submissionId) {
+      const canDownload = await checkApprovalStatus();
+      if (!canDownload) {
+        setTimeout(() => setStatusMessage(''), 5000);
+        return;
+      }
+    }
+
     setIsDownloading(true);
     
     try {
@@ -248,7 +317,8 @@ const quoteData = {
         subtotal,
         vatAmount,
         total,
-        quoteNumber: savedQuoteId ? `Q${savedQuoteId}` : `Q${Date.now()}`
+        quoteNumber: savedQuoteId ? `Q${savedQuoteId}` : `Q${Date.now()}`,
+        submission_id: submissionId
       };
 
       const response = await fetch('/api/generate-pdf', {
@@ -263,7 +333,6 @@ const quoteData = {
         throw new Error('Failed to generate PDF');
       }
 
-      // Create blob and download
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -274,7 +343,6 @@ const quoteData = {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
 
-      // Close modal after successful download
       setTimeout(() => {
         setShowSuccessModal(false);
         router.back();
@@ -294,22 +362,20 @@ const quoteData = {
   };
 
   const handleGenerateQuote = () => {
-    // This will just trigger the same PDF generation as the modal
     handleDownloadPdf();
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Success Modal */}
       <SuccessModal
         isOpen={showSuccessModal}
         onClose={() => setShowSuccessModal(false)}
         onDownloadPdf={handleDownloadPdf}
         onGoBack={handleGoBack}
         isDownloading={isDownloading}
+        approvalStatus={approvalStatus}
       />
 
-      {/* Header */}
       <div className="border-b border-gray-200 bg-white px-8 py-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -324,8 +390,49 @@ const quoteData = {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="px-8 py-6 max-w-6xl">
-        {/* Customer Information */}
+      {/* Approval Status Badge */}
+      {submissionId && (
+        <div className="px-8 pt-6">
+          <div className={`p-3 rounded-lg border-l-4 ${
+            approvalStatus === 'approved' ? 'bg-green-50 border-green-500' :
+            approvalStatus === 'rejected' ? 'bg-red-50 border-red-500' :
+            'bg-yellow-50 border-yellow-500'
+          }`}>
+            <div className="flex items-center">
+              <AlertCircle className={`h-5 w-5 mr-2 ${
+                approvalStatus === 'approved' ? 'text-green-600' :
+                approvalStatus === 'rejected' ? 'text-red-600' :
+                'text-yellow-600'
+              }`} />
+              <span className="font-medium">
+                Status: <span className="capitalize">{approvalStatus}</span>
+              </span>
+            </div>
+            {approvalStatus === 'rejected' && rejectionReason && (
+              <p className="text-sm text-red-700 mt-1 ml-7">Reason: {rejectionReason}</p>
+            )}
+            {approvalStatus === 'pending' && (
+              <p className="text-sm text-yellow-700 mt-1 ml-7">Waiting for manager approval before PDF download is available.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Status Message */}
+      {statusMessage && (
+        <div className="px-8 pt-4">
+          <div className={`p-3 rounded-md text-sm font-medium ${
+            statusMessage.startsWith("✅") ? "bg-green-100 text-green-800" :
+            statusMessage.startsWith("❌") ? "bg-red-100 text-red-800" :
+            statusMessage.startsWith("⚠️") ? "bg-yellow-100 text-yellow-800" :
+            "bg-gray-200 text-gray-800"
+          }`}>
+            {statusMessage}
+          </div>
+        </div>
+      )}
+
+      <div className="px-8 py-6 max-w-6xl">
         <Card className="mb-6">
           <CardHeader>
             <CardTitle>Customer Information</CardTitle>
@@ -397,7 +504,6 @@ const quoteData = {
           </CardContent>
         </Card>
 
-        {/* Quote Items */}
         <Card className="mb-6">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -486,7 +592,6 @@ const quoteData = {
           </CardContent>
         </Card>
 
-        {/* Totals */}
         <Card className="mb-6">
           <CardHeader>
             <CardTitle>Quote Summary</CardTitle>
@@ -509,7 +614,6 @@ const quoteData = {
           </CardContent>
         </Card>
 
-        {/* Actions */}
         <div className="flex items-center justify-between">
           <Button type="button" variant="outline" onClick={() => router.back()}>
             Cancel
@@ -532,7 +636,7 @@ const quoteData = {
             </Button>
           </div>
         </div>
-      </form>
+      </div>
     </div>
   );
 }

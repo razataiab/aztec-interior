@@ -198,23 +198,27 @@ export function CreateCustomerModal({
     setSubmitting(true);
 
     try {
+      const token = localStorage.getItem('auth_token'); // GET AUTH TOKEN
+
       const response = await fetch("http://127.0.0.1:5000/customers", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}` // ADD AUTH HEADER
         },
         body: JSON.stringify(formData),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create customer");
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to create customer");
       }
 
       onCustomerCreated();
       handleClose();
     } catch (error) {
       console.error("Error creating customer:", error);
-      alert("Error creating customer. Please try again.");
+      alert(`Error creating customer: ${error instanceof Error ? error.message : 'Please try again.'}`);
     } finally {
       setSubmitting(false);
     }

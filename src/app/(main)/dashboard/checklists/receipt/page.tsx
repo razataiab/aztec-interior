@@ -2,14 +2,15 @@
 
 import React, { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { ArrowLeft, Printer, Save, Download } from "lucide-react";
+import { ArrowLeft, Printer, Save, Download, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
+// ControlledCurrencyInput component definition remains the same
 const ControlledCurrencyInput = ({ value, onChange, className, placeholder }: any) => {
     const [localValue, setLocalValue] = useState(value);
-    
+
     React.useEffect(() => {
         setLocalValue(value);
     }, [value]);
@@ -43,7 +44,7 @@ const ControlledCurrencyInput = ({ value, onChange, className, placeholder }: an
         setLocalValue(formatted);
         onChange(formatted);
     };
-    
+
     return (
         <input
             type="text"
@@ -60,7 +61,7 @@ const ControlledCurrencyInput = ({ value, onChange, className, placeholder }: an
 export default function ReceiptViewPage() {
     const searchParams = useSearchParams();
     const router = useRouter();
-    
+
     const today = new Date().toISOString().split('T')[0];
 
     const getParam = (key: string, defaultValue: string): string => {
@@ -77,11 +78,11 @@ export default function ReceiptViewPage() {
         }
         return value || defaultValue;
     };
-    
+
     const customerId = getParam("customerId", "N/A");
-    const customerName = getParam("customerName", ""); 
-    const customerAddress = getParam("customerAddress", ""); 
-    const customerPhone = getParam("customerPhone", ""); 
+    const customerName = getParam("customerName", "");
+    const customerAddress = getParam("customerAddress", "");
+    const customerPhone = getParam("customerPhone", "");
     const receiptType = getParam("type", "receipt");
     const paymentMethod = getParam("paymentMethod", "BACS");
     const paymentDescription = getParam("paymentDescription", "Payment received for your Kitchen/Bedroom Cabinetry.");
@@ -92,6 +93,11 @@ export default function ReceiptViewPage() {
     const [receiptDate, setReceiptDate] = useState<string>(getParam("receiptDate", today));
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [saveMessage, setSaveMessage] = useState("");
+
+    // Approval workflow state
+    const [submissionId, setSubmissionId] = useState<number | null>(null);
+    const [approvalStatus, setApprovalStatus] = useState<string>('pending');
+    const [rejectionReason, setRejectionReason] = useState<string>('');
 
     const displayDate = new Date(receiptDate).toLocaleDateString('en-GB', {
         day: '2-digit', month: 'long', year: 'numeric'
@@ -109,12 +115,13 @@ export default function ReceiptViewPage() {
         balanceToPay: Number(balanceToPay),
         paymentMethod,
         paymentDescription,
+        submission_id: submissionId, // Include for download check
     });
 
     const handleSave = async () => {
         setIsSubmitting(true);
         setSaveMessage("");
-        
+
         const data = getReceiptData();
 
         try {
@@ -124,11 +131,20 @@ export default function ReceiptViewPage() {
                 body: JSON.stringify(data),
             });
 
+            const result = await response.json();
+
             if (response.ok) {
-                setSaveMessage("✅ Receipt saved successfully!");
+                // Store submission ID and approval status
+                setSubmissionId(result.form_submission_id);
+                setApprovalStatus(result.approval_status || 'pending');
+
+                if (result.approval_status === 'pending') {
+                    setSaveMessage("✅ Receipt saved and sent to manager for approval!");
+                } else {
+                    setSaveMessage("✅ Receipt saved successfully!");
+                }
             } else {
-                const errorData = await response.json().catch(() => ({ error: "Server error" }));
-                setSaveMessage(`❌ Failed to save receipt: ${errorData.error || response.statusText}`);
+                setSaveMessage(`❌ Failed to save receipt: ${result.error || response.statusText}`);
             }
         } catch (error) {
             console.error("Network error during save:", error);
@@ -139,7 +155,43 @@ export default function ReceiptViewPage() {
         }
     };
 
+    // Check approval status before download
+    const checkApprovalStatus = async () => {
+        if (!submissionId) {
+            setSaveMessage('⚠️ Please save the receipt first.');
+            return false;
+        }
+
+        try {
+            const response = await fetch(`http://127.0.0.1:5000/approvals/status/${submissionId}`);
+            const data = await response.json();
+
+            setApprovalStatus(data.approval_status);
+            setRejectionReason(data.rejection_reason || '');
+
+            if (data.approval_status === 'rejected') {
+                setSaveMessage(`❌ This receipt was rejected. Reason: ${data.rejection_reason}`);
+                return false;
+            } else if (data.approval_status === 'pending') {
+                setSaveMessage('⚠️ This receipt is pending manager approval. You cannot download it yet.');
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            setSaveMessage('❌ Failed to check approval status.');
+            return false;
+        }
+    };
+
     const handleDownloadPdf = async () => {
+        // Check approval status first
+        const canDownload = await checkApprovalStatus();
+        if (!canDownload) {
+            setTimeout(() => setSaveMessage(""), 5000);
+            return;
+        }
+
         setSaveMessage("⌛ Generating PDF on server...");
         const data = getReceiptData();
 
@@ -163,8 +215,8 @@ export default function ReceiptViewPage() {
                 window.URL.revokeObjectURL(url);
                 setSaveMessage("✅ PDF successfully generated and downloaded!");
             } else {
-                const errorData = await response.json().catch(() => ({ error: "Server error" }));
-                setSaveMessage(`❌ PDF generation failed: ${errorData.error || response.statusText}`);
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                setSaveMessage(`❌ Failed to generate PDF: ${errorData.error || response.statusText}`);
             }
         } catch (error) {
             console.error("Network error during PDF download:", error);
@@ -175,170 +227,165 @@ export default function ReceiptViewPage() {
     };
 
     const handlePrint = () => {
+        // For simplicity, we'll just log an action. In a real app, you might use a print-friendly view or an existing PDF.
         window.print();
     };
 
+    const getStatusVariant = () => {
+        switch (approvalStatus) {
+            case 'approved':
+                return 'text-green-600 bg-green-100 border-green-300';
+            case 'rejected':
+                return 'text-red-600 bg-red-100 border-red-300';
+            case 'pending':
+            default:
+                return 'text-yellow-600 bg-yellow-100 border-yellow-300';
+        }
+    };
+
     return (
-        <div className="p-8 max-w-4xl mx-auto space-y-6">
-            
-            <div className="flex justify-between items-center no-print">
-                <Button variant="outline" onClick={() => router.back()} className="text-sm">
-                    <ArrowLeft className="h-4 w-4 mr-2" />
+        <div className="container mx-auto p-4 md:p-8 space-y-8">
+            <header className="flex justify-between items-center mb-6">
+                <Button variant="ghost" onClick={() => router.back()} className="text-lg">
+                    <ArrowLeft className="mr-2 h-5 w-5" />
                     Back
                 </Button>
-                <div className="flex space-x-3">
-                    <Button onClick={handleSave} disabled={isSubmitting} className="flex items-center">
-                        <Save className="h-4 w-4 mr-2" />
-                        {isSubmitting ? "Saving..." : "Save Receipt"}
+                <h1 className="text-3xl font-bold capitalize">{receiptType} View</h1>
+                <div className="flex space-x-2">
+                    <Button onClick={handlePrint} variant="outline" title="Print">
+                        <Printer className="h-5 w-5" />
                     </Button>
-                    <Button variant="secondary" onClick={handleDownloadPdf} className="flex items-center">
-                        <Download className="h-4 w-4 mr-2" />
-                        Download PDF
+                    <Button onClick={handleDownloadPdf} disabled={!submissionId || approvalStatus !== 'approved'} title={approvalStatus !== 'approved' ? `Must be approved to download. Current status: ${approvalStatus}` : 'Download PDF'} variant="outline">
+                        <Download className="mr-2 h-5 w-5" />
+                        Download
                     </Button>
-                    <Button onClick={handlePrint} className="flex items-center">
-                        <Printer className="h-4 w-4 mr-2" />
-                        Print
+                    <Button onClick={handleSave} disabled={isSubmitting} title="Save/Submit for Approval">
+                        <Save className="mr-2 h-5 w-5" />
+                        {isSubmitting ? "Saving..." : "Save"}
                     </Button>
                 </div>
-            </div>
+            </header>
 
             {saveMessage && (
-                <div className={`mt-4 p-3 rounded-md text-sm font-medium ${
-                    saveMessage.startsWith("✅") ? "bg-green-100 text-green-700" : 
-                    saveMessage.startsWith("❌") ? "bg-red-100 text-red-700" : 
-                    "bg-blue-100 text-blue-700"
-                } no-print`}>
+                <div className={`p-3 rounded-md border text-sm ${saveMessage.startsWith('❌') ? 'bg-red-100 border-red-400 text-red-700' : saveMessage.startsWith('✅') ? 'bg-green-100 border-green-400 text-green-700' : 'bg-yellow-100 border-yellow-400 text-yellow-700'}`}>
                     {saveMessage}
                 </div>
             )}
 
-            <Card className="shadow-xl print:shadow-none print:border print:border-black">
-                <CardHeader className="bg-white p-6 border-b-4 border-white print:border-none">
-                    <div className="flex justify-center w-full"> 
-                        <div className="flex justify-start items-center space-x-4">
-                            <div className="flex-shrink-0">
-                                <img 
-                                    src="/images/logo.png" 
-                                    alt="Aztec Interiors Logo" 
-                                    className="h-16 w-auto" 
-                                />
-                            </div>
-                            <div className="flex-grow text-left">
-                                <h1 className="text-xl font-bold uppercase tracking-widest text-black">AZTEC INTERIORS</h1> 
-                                <h2 className="text-lg font-semibold uppercase tracking-wider text-black">OFFICIAL RECEIPT</h2>
-                            </div>
-                        </div>
-                    </div>
-                </CardHeader>
+            {/* Approval Status and Rejection Reason */}
+            <div className={`p-4 rounded-lg border flex items-center space-x-3 ${getStatusVariant()}`}>
+                <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                <div className="flex flex-col">
+                    <span className="font-semibold capitalize">Approval Status: {approvalStatus}</span>
+                    {approvalStatus === 'rejected' && rejectionReason && (
+                        <p className="text-sm mt-1">
+                            Rejection Reason: <span className="font-normal">{rejectionReason}</span>
+                        </p>
+                    )}
+                </div>
+            </div>
 
-                <CardContent className="p-10 print:p-6 space-y-8 print:space-y-6">
-                    
-                    <div className="grid grid-cols-2 gap-4 border-b border-gray-300 pb-4 print:grid-cols-2 print:border-gray-900 print:pb-2">
-                        <div className="space-y-2">
-                            <h3 className="text-lg font-bold text-gray-900 print:hidden">Customer Details</h3>
-                            <div className="text-black">
-                                <p className="text-base print:text-sm">
-                                    <span className="font-semibold w-16 inline-block">Name:</span> {customerName}
-                                </p>
-                                <p className="text-base print:text-sm">
-                                    <span className="font-semibold w-16 inline-block">Address:</span> {customerAddress}
-                                </p>
-                                <p className="text-base print:text-sm">
-                                    <span className="font-semibold w-16 inline-block">Phone:</span> {customerPhone}
-                                </p>
-                            </div>
+            {/* --- */}
+
+            <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Customer Information Card */}
+                <Card className="lg:col-span-1">
+                    <CardHeader>
+                        <CardTitle>Customer Details</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm">
+                        <div>
+                            <p className="text-gray-500">Customer ID</p>
+                            <p className="font-medium">{customerId}</p>
                         </div>
-                        <div className="text-right self-start flex flex-col items-end pt-8 print:pt-0">
-                             <div className="flex items-center space-x-2 w-full max-w-[200px] print:justify-end">
-                                <label htmlFor="receiptDate" className="text-base font-semibold flex-shrink-0 text-black print:hidden">Date:</label>
-                                <span className="hidden print:inline-block text-base font-semibold text-black">{displayDate}</span>
-                                <Input 
-                                    id="receiptDate" 
-                                    type="date" 
-                                    value={receiptDate} 
-                                    onChange={(e: any) => setReceiptDate(e.target.value)} 
-                                    className="p-1 text-base text-right print:p-0 print:border-none print:text-black print:text-right print:bg-white print:hidden"
+                        <div>
+                            <p className="text-gray-500">Name</p>
+                            <p className="font-medium">{customerName || 'N/A'}</p>
+                        </div>
+                        <div>
+                            <p className="text-gray-500">Address</p>
+                            <p className="font-medium">{customerAddress || 'N/A'}</p>
+                        </div>
+                        <div>
+                            <p className="text-gray-500">Phone</p>
+                            <p className="font-medium">{customerPhone || 'N/A'}</p>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                {/* Receipt Details Card */}
+                <Card className="lg:col-span-2">
+                    <CardHeader>
+                        <CardTitle>Transaction Details</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    Date
+                                </label>
+                                <Input
+                                    type="date"
+                                    value={receiptDate}
+                                    onChange={(e) => setReceiptDate(e.target.value)}
+                                    max={today}
+                                    className="mt-1"
                                 />
+                                <p className="text-xs text-gray-500 mt-1">Display Date: {displayDate}</p>
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    Payment Method
+                                </label>
+                                <Input value={paymentMethod} readOnly className="mt-1 bg-gray-50" />
                             </div>
                         </div>
-                    </div>
-                    
-                    <div className="text-lg font-medium text-black pt-4">
-                        Confirmation of payment received by <strong>{paymentMethod}</strong> for {paymentDescription}
-                    </div>
-                    
-                    <div className="p-6 rounded-lg border-2 border-gray-200 bg-gray-50 print:bg-white print:border-transparent">
-                        <div className="flex items-center justify-between">
-                            <p className="text-xl font-bold text-gray-800 flex-shrink-0">Paid:</p>
-                            <div className="w-1/2 flex items-center space-x-1 justify-end">
-                                <span className="text-xl font-bold text-gray-800">£</span>
+
+                        <div>
+                            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                Payment Description
+                            </label>
+                            <Input value={paymentDescription} readOnly className="mt-1 bg-gray-50" />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    Paid Amount (£)
+                                </label>
                                 <ControlledCurrencyInput
                                     value={paidAmount}
                                     onChange={setPaidAmount}
-                                    className="text-xl font-bold text-gray-800 text-right p-1 border-none focus:ring-0 bg-transparent print:bg-white"
                                     placeholder="0.00"
+                                    className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                 />
                             </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-2 pt-4">
-                        <div className="flex justify-between items-center text-base font-semibold border-b border-gray-200 pb-2 print:text-black">
-                            <span>Paid to date:</span> 
-                            <div className="w-1/2 flex items-center space-x-1 justify-end">
-                                <span className="flex-shrink-0">£</span>
+                            <div>
+                                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    Total Paid To Date (£)
+                                </label>
                                 <ControlledCurrencyInput
                                     value={totalPaidToDate}
                                     onChange={setTotalPaidToDate}
-                                    className="text-right p-1 border-none focus:ring-0 bg-transparent print:bg-white"
                                     placeholder="0.00"
+                                    className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                 />
                             </div>
-                        </div>
-                        <div className="flex justify-between items-center text-lg font-extrabold text-gray-900">
-                            <span>Balance to Pay:</span> 
-                            <div className="w-1/2 flex items-center space-x-1 justify-end">
-                                <span className="flex-shrink-0">£</span>
+                            <div>
+                                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    Balance To Pay (£)
+                                </label>
                                 <ControlledCurrencyInput
                                     value={balanceToPay}
                                     onChange={setBalanceToPay}
-                                    className="text-lg font-extrabold text-gray-900 text-right p-1 border-none focus:ring-0 bg-transparent print:bg-white"
                                     placeholder="0.00"
+                                    className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                 />
                             </div>
                         </div>
-                    </div>
-
-                    <p className="pt-8 text-md font-medium text-black">Many Thanks</p>
-
-                    <div className="flex justify-start items-center space-x-4 pt-4">
-                        <p className="text-xl font-serif italic text-gray-800">Shahida Macci</p>
-                    </div>
-                </CardContent>
-
-                <footer className="bg-gray-100 p-6 text-xs text-gray-600 border-t print:bg-white print:p-0 print:border-none print:mt-4">
-                    <address className="not-italic text-center space-y-1">
-                        <p className="font-bold text-black">Aztec Interiors (Leicester) Ltd</p>
-                        <p>127b Barkby Road (Entrance on Lewisher Road)</p>
-                        <p>Leicester LE4 9LG</p>
-                        <p>Tel: 0116 2764516</p>
-                        <p>Web: <a href="http://www.aztecinteriors.co.uk" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">www.aztecinteriors.co.uk</a></p>
-                        <p className="pt-2">Registered to England No. 5246691 | VAT Reg No. 846 8818 72</p>
-                    </address>
-                </footer>
-            </Card>
-
-            <style jsx global>{`
-                @media print {
-                    .no-print {
-                        display: none !important;
-                    }
-                    body {
-                        print-color-adjust: exact;
-                        -webkit-print-color-adjust: exact;
-                    }
-                }
-            `}</style>
+                    </CardContent>
+                </Card>
+            </section>
         </div>
     );
 }
