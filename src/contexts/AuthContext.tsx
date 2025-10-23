@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { useRouter } from 'next/navigation';
 
 interface User {
+    name: any;
     id: number;
     email: string;
     first_name: string;
@@ -25,7 +26,7 @@ interface RegisterData {
     last_name: string;
     phone?: string;
     department?: string;
-    role: string; // <--- FIX 1: Added missing role field based on backend requirements
+    role: string;
 }
 
 interface AuthContextType {

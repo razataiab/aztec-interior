@@ -174,7 +174,13 @@ export default function DataImportComponent({ onImportComplete, trigger }: DataI
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={open} onOpenChange={(isOpen) => {
+      if (isOpen) {
+        setOpen(true);
+      } else {
+        handleClose(); // This now correctly calls your close/reset logic
+      }
+    }}>
       <DialogTrigger asChild>
         {trigger || (
           <Button variant="outline">
@@ -227,18 +233,6 @@ export default function DataImportComponent({ onImportComplete, trigger }: DataI
                     <span>({(selectedFile.size / 1024).toFixed(1)} KB)</span>
                   </div>
                 )}
-              </div>
-
-              {/* Import Guidelines */}
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <h4 className="font-medium text-blue-900 mb-2">Import Guidelines</h4>
-                <ul className="text-sm text-blue-800 space-y-1">
-                  <li>• Excel files (.xlsx, .xls) and CSV files are supported</li>
-                  <li>• Maximum file size: 10MB</li>
-                  <li>• Required columns will be validated during import</li>
-                  <li>• Existing products with matching model codes will be updated</li>
-                  <li>• New brands and categories will be created automatically</li>
-                </ul>
               </div>
 
               {/* Column Mapping Info */}

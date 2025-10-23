@@ -119,10 +119,10 @@ const ROLE_PERMISSIONS: Record<UserRole, any> = {
     },
     Production: {
         canCreate: false,
-        canEdit: false,
+        canEdit: true,
         canDelete: false,
         canViewFinancials: false, 
-        canDragDrop: false, 
+        canDragDrop: true, 
         canViewAllRecords: true, 
         canSendQuotes: false,
         canSchedule: false,
@@ -221,6 +221,17 @@ type AuditLog = {
     change_summary: string;
 };
 
+const getAuthHeaders = () => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+        throw new Error('No authentication token found. Please log in.');
+    }
+    return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+    };
+};
+
 const makeColumns = () =>
     STAGES.map((name) => ({
         id: `col-${name.toLowerCase().replace(/\s+/g, "-")}`,
@@ -250,6 +261,7 @@ export default function EnhancedPipelinePage() {
     const [filterStage, setFilterStage] = useState("all");
     const [filterType, setFilterType] = useState("all");
     const [filterDateRange, setFilterDateRange] = useState("all");
+    const { user, token, loading: authLoading } = useAuth();
     const [editDialog, setEditDialog] = useState<{
         open: boolean;
         itemId: string | null;
@@ -263,7 +275,6 @@ export default function EnhancedPipelinePage() {
     const prevFeaturesRef = useRef<any[]>([]);
 
     const columns = useMemo(() => makeColumns(), []);
-    const { user } = useAuth();
     
     // Get user role and permissions
     const userRole = (user?.role || "Staff") as UserRole;
@@ -308,7 +319,7 @@ export default function EnhancedPipelinePage() {
         if (!permissions.canEdit) return false;
         
         // Managers and HR can edit everything
-        if (userRole === "Manager" || userRole === "HR") {
+        if (userRole === "Manager" || userRole === "HR" || userRole === "Production") {
             return true;
         }
         
@@ -424,6 +435,18 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
 
     // Fetch data from backend
     useEffect(() => {
+        if (authLoading) {
+            console.log("⏳ Auth still loading, skipping fetch...");
+            return;
+          }
+      
+          // ✅ Ensure both user and token exist
+          if (!user || !token) {
+            console.warn("⚠️ No user or token available, skipping fetch.");
+            setError("User not authenticated.");
+            setLoading(false);
+            return;
+          }
         const fetchData = async () => {
             try {
                 setLoading(true);
@@ -435,7 +458,9 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
 
                 // 1. Try fetching from the combined pipeline endpoint
                 try {
-                    const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline');
+                    const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline', {
+                        headers: getAuthHeaders() // ADD THIS
+                    });
                     if (pipelineResponse.ok) {
                         const rawPipelineData = await pipelineResponse.json();
                         
@@ -499,14 +524,18 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                 }
 
                 // 2. Fallback to individual endpoints (logic remains the same)
-                const customersResponse = await fetch('http://127.0.0.1:5000/customers');
+                const customersResponse = await fetch('http://127.0.0.1:5000/customers', {
+                    headers: getAuthHeaders() // ADD THIS
+                });
                 if (!customersResponse.ok) {
                     throw new Error(`Failed to fetch customers: ${customersResponse.statusText}`);
                 }
                 customersData = await customersResponse.json();
 
                 try {
-                    const jobsResponse = await fetch('http://127.0.0.1:5000/jobs');
+                    const jobsResponse = await fetch('http://127.0.0.1:5000/jobs', {
+                        headers: getAuthHeaders() // ADD THIS
+                    });
                     if (jobsResponse.ok) {
                         jobsData = await jobsResponse.json();
                     }
@@ -532,7 +561,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         };
 
         fetchData();
-    }, [user]);
+    }, [authLoading, token, user]);
 
     const handleDataChange = async (next: any[]) => {
         if (!permissions.canDragDrop) {
@@ -545,6 +574,15 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
             const p = prev.find((x) => x.id === n.id);
             return p && p.column !== n.column;
         });
+
+        // --- ADD LOGGING HERE ---
+     if (moved.length > 0) {
+        console.log("handleDataChange triggered. Moved items:", moved.map(item => ({
+            id: item.itemId,
+            targetColumn: item.column,
+            targetStage: columnIdToStage(item.column)
+        })));
+     }
 
         if (moved.length > 0) {
             const unauthorizedMoves = moved.filter(item => {
@@ -574,16 +612,16 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                         ? `http://127.0.0.1:5000/customers/${entityId}/stage`
                         : `http://127.0.0.1:5000/jobs/${entityId}/stage`;
 
-                    const response = await fetch(endpoint, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            stage: newStage,
-                            // CRITICAL: We include the reason, which will trigger the logging on the backend.
-                            reason: "Moved via Kanban board", 
-                            updated_by: user?.email || "current_user"
-                        }),
-                    });
+                        const response = await fetch(endpoint, {
+                            method: "PATCH",
+                            headers: getAuthHeaders(), // NEW - FIX
+                            body: JSON.stringify({
+                                stage: newStage,
+                                // CRITICAL: We include the reason, which will trigger the logging on the backend.
+                                reason: "Moved via Kanban board", 
+                                updated_by: user?.email || "current_user"
+                            }),
+                        });
 
                     if (!response.ok) {
                         const errorData = await response.json();
@@ -637,7 +675,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
 
     const refetchPipelineData = async () => {
         try {
-            const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline');
+            const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline', { headers: getAuthHeaders() });
             if (pipelineResponse.ok) {
                 const pipelineData = await pipelineResponse.json();
 
@@ -836,7 +874,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
 
             const response = await fetch(endpoint, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json" },
+                headers: getAuthHeaders(),
                 body: JSON.stringify({ stage: newStage, reason }),
             });
 
@@ -1026,7 +1064,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                 <Alert className="border-orange-200 bg-orange-50">
                     <AlertCircle className="h-4 w-4" />
                     <AlertDescription>
-                        You have read-only access to jobs in production stages. Pricing information is hidden.
+                    You can manage and move jobs through the pipeline. Pricing information is hidden.
                     </AlertDescription>
                 </Alert>
             )}
@@ -1154,7 +1192,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                             >
                                                 <KanbanHeader className="flex-shrink-0 p-2.5 border-b bg-gray-50/80 rounded-t-lg">
                                                     <div className="flex items-center gap-1.5">
-                                                        <div className="h-1.5 w-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: column.color }} />
+                                                        <div className="h-1.5 w-1.5 rounded-full flex-shrink-0"/>
                                                         <span className="font-medium text-xs">{column.name}</span>
                                                         <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
                                                             {counts[column.id] ?? 0}
@@ -1179,8 +1217,6 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                                             salesperson: feature.salesperson,
                                                         } as PipelineItem);
                                                         
-                                                        // CONFIRMED: All notes rendering logic is explicitly removed from this return block.
-
                                                         return (
                                                             <KanbanCard
                                                                 column={column.id}

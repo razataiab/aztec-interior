@@ -110,7 +110,6 @@ const allSidebarItems: NavGroup[] = [
        url: "/dashboard/approvals",
        icon: CheckCircle,
        roles: ["manager"],
-       badge: true,
       },
       {
         title: "Settings",

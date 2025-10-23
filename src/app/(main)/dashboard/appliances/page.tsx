@@ -4,8 +4,6 @@ import { useState, useEffect } from "react";
 import { Search, Plus, Upload, Filter, Edit, Trash2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -21,6 +19,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRouter } from "next/navigation";
+import { Separator } from "@/components/ui/separator";
+import DataImportComponent from "./products/new/DataImportComponent";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+
+// --- New Imports for Modals ---
 import {
   Dialog,
   DialogContent,
@@ -28,10 +33,22 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
+  DialogClose,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useRouter } from "next/navigation";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+// --- End New Imports ---
+
+// Define the brands for the quick filter
+const QUICK_FILTER_BRANDS = ["Bosch", "Siemens", "Neff", "Samsung"];
 
 interface Product {
   id: number;
@@ -79,44 +96,103 @@ interface Category {
   product_count: number;
 }
 
+// --- New Types and Constants for Form Modal ---
+interface ProductFormData {
+  model_code: string;
+  name: string;
+  description?: string;
+  series?: string;
+  brand_id?: number;
+  category_id?: number;
+  base_price?: number;
+  low_tier_price?: number;
+  mid_tier_price?: number;
+  high_tier_price?: number;
+  pack_name?: string;
+  energy_rating?: string;
+  warranty_years?: number;
+}
+
+const EMPTY_FORM_DATA: ProductFormData = {
+  model_code: "",
+  name: "",
+  description: "",
+  series: "",
+  brand_id: undefined,
+  category_id: undefined,
+  base_price: undefined,
+  low_tier_price: undefined,
+  mid_tier_price: undefined,
+  high_tier_price: undefined,
+  pack_name: "",
+  energy_rating: "",
+  warranty_years: undefined,
+};
+// --- End New Types ---
+
 export default function ApplianceCatalogPage() {
   const router = useRouter();
-  
+
   // State
   const [products, setProducts] = useState<Product[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedBrand, setSelectedBrand] = useState<string>("");
+
+  // State for brand checkboxes
+  const [selectedBrands, setSelectedBrands] = useState(new Set<string>());
+
+  // State for collapsible filters
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [selectedTier, setSelectedTier] = useState<string>("");
   const [showFilters, setShowFilters] = useState(false);
+
   const [pagination, setPagination] = useState({
     page: 1,
     per_page: 50,
     total: 0,
-    pages: 0
+    pages: 0,
   });
 
-  // Load initial data
+  // --- New State for Modals ---
+  const [formModalOpen, setFormModalOpen] = useState(false);
+  const [viewModalOpen, setViewModalOpen] = useState(false);
+  const [deleteAlertOpen, setDeleteAlertOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"add" | "edit">("add");
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [formData, setFormData] = useState<ProductFormData>(EMPTY_FORM_DATA);
+  const [formError, setFormError] = useState<string | null>(null);
+  // --- End New State ---
+
+  // Load initial data (brands, categories)
   useEffect(() => {
     loadData();
   }, []);
 
-  // Load data when filters change
+  // Load products when filters or page change
   useEffect(() => {
-    loadProducts();
-  }, [searchTerm, selectedBrand, selectedCategory, selectedTier, pagination.page]);
+    // Only load products if brands/categories are already loaded
+    if (!loading) {
+      loadProducts();
+    }
+  }, [
+    selectedBrands,
+    selectedCategory,
+    selectedTier,
+    searchTerm,
+    pagination.page,
+    loading,
+  ]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      
-      // Load brands and categories
+
+      // Await brands and categories first
       const [brandsRes, categoriesRes] = await Promise.all([
         fetch("http://127.0.0.1:5000/brands"),
-        fetch("http://127.0.0.1:5000/categories")
+        fetch("http://127.0.0.1:5000/categories"),
       ]);
 
       if (brandsRes.ok) {
@@ -129,11 +205,11 @@ export default function ApplianceCatalogPage() {
         setCategories(categoriesData);
       }
 
-      // Load products
-      await loadProducts();
+      // Set loading false *after* metadata is loaded
+      setLoading(false);
+      // The useEffect for loadProducts will now run
     } catch (error) {
       console.error("Error loading data:", error);
-    } finally {
       setLoading(false);
     }
   };
@@ -142,23 +218,37 @@ export default function ApplianceCatalogPage() {
     try {
       const params = new URLSearchParams({
         page: pagination.page.toString(),
-        per_page: pagination.per_page.toString()
+        per_page: pagination.per_page.toString(),
       });
 
-      if (searchTerm) params.append('search', searchTerm);
-      if (selectedBrand) params.append('brand_id', selectedBrand);
-      if (selectedCategory) params.append('category_id', selectedCategory);
-      if (selectedTier) params.append('tier', selectedTier);
+      if (searchTerm) params.append("search", searchTerm);
+      if (selectedCategory) params.append("category_id", selectedCategory);
+      if (selectedTier) params.append("tier", selectedTier);
+
+      // --- New Brand Filter Logic ---
+      // Get the IDs for the brand names in the checkbox Set
+      const brandIdsToFilter = brands
+        .filter((brand) => selectedBrands.has(brand.name))
+        .map((brand) => brand.id.toString());
+
+      // Add each ID as a separate 'brand_id' parameter
+      // Your backend will need to read this with `request.args.getlist('brand_id')`
+      if (brandIdsToFilter.length > 0) {
+        brandIdsToFilter.forEach((id) => {
+          params.append("brand_id", id);
+        });
+      }
+      // --- End New Logic ---
 
       const response = await fetch(`http://127.0.0.1:5000/products?${params}`);
-      
+
       if (response.ok) {
         const data = await response.json();
         setProducts(data.products);
-        setPagination(prev => ({
+        setPagination((prev) => ({
           ...prev,
           total: data.pagination.total,
-          pages: data.pagination.pages
+          pages: data.pagination.pages,
         }));
       }
     } catch (error) {
@@ -167,41 +257,203 @@ export default function ApplianceCatalogPage() {
   };
 
   const formatPrice = (price?: number) => {
-    if (!price) return "—";
+    if (price === undefined || price === null) return "—";
     return `£${price.toFixed(2)}`;
   };
 
-  const getPriceForTier = (product: Product, tier: string) => {
-    const pricing = product.pricing;
-    switch (tier.toLowerCase()) {
-      case 'low': return pricing.low_tier_price || pricing.base_price;
-      case 'mid': return pricing.mid_tier_price || pricing.base_price;
-      case 'high': return pricing.high_tier_price || pricing.base_price;
-      default: return pricing.base_price;
-    }
+  const getProductTierTag = (product: Product): string => {
+    const tiers: string[] = [];
+    if (product.pricing.low_tier_price) tiers.push("Low");
+    if (product.pricing.mid_tier_price) tiers.push("Mid");
+    if (product.pricing.high_tier_price) tiers.push("High");
+    if (tiers.length === 0) return "—";
+    return tiers.join(" / ");
   };
 
   const clearFilters = () => {
     setSearchTerm("");
-    setSelectedBrand("");
+    setSelectedBrands(new Set<string>()); // Clear checkboxes
     setSelectedCategory("");
     setSelectedTier("");
-    setPagination(prev => ({ ...prev, page: 1 }));
+    setPagination((prev) => ({ ...prev, page: 1 }));
   };
+
+  // Handler for brand checkboxes
+  const handleBrandCheckboxChange = (
+    brandName: string,
+    checked: boolean | "indeterminate"
+  ) => {
+    setSelectedBrands((prev) => {
+      const newSet = new Set(prev);
+      if (checked) {
+        newSet.add(brandName);
+      } else {
+        newSet.delete(brandName);
+      }
+      return newSet;
+    });
+  };
+
+  // --- New Modal Handler Functions ---
+
+  const handleAddClick = () => {
+    setModalMode("add");
+    setSelectedProduct(null);
+    setFormData(EMPTY_FORM_DATA);
+    setFormError(null);
+    setFormModalOpen(true);
+  };
+
+  const handleEditClick = (product: Product) => {
+    setModalMode("edit");
+    setSelectedProduct(product);
+    // Flatten product data for the form
+    setFormData({
+      model_code: product.model_code,
+      name: product.name,
+      description: product.description || "",
+      series: product.series || "",
+      brand_id: product.brand?.id,
+      category_id: product.category?.id,
+      base_price: product.pricing.base_price,
+      low_tier_price: product.pricing.low_tier_price,
+      mid_tier_price: product.pricing.mid_tier_price,
+      high_tier_price: product.pricing.high_tier_price,
+      pack_name: product.pack_name || "",
+      energy_rating: product.energy_rating || "",
+      warranty_years: product.warranty_years,
+    });
+    setFormError(null);
+    setFormModalOpen(true);
+  };
+
+  const handleViewClick = (product: Product) => {
+    setSelectedProduct(product);
+    setViewModalOpen(true);
+  };
+
+  const handleDeleteClick = (product: Product) => {
+    setSelectedProduct(product);
+    setDeleteAlertOpen(true);
+  };
+
+  const handleFormChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
+    const { name, value, type } = e.target;
+    setFormData((prev) => ({
+      ...prev,
+      [name]:
+        type === "number" ? (value === "" ? undefined : parseFloat(value)) : value,
+    }));
+  };
+
+  const handleSelectChange = (
+    name: "brand_id" | "category_id",
+    value: string
+  ) => {
+    setFormData((prev) => ({
+      ...prev,
+      [name]: value ? parseInt(value, 10) : undefined,
+    }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    // --- ADD THIS LINE FOR DEBUGGING ---
+    console.log("handleSubmit triggered. Mode:", modalMode);
+    // --- END DEBUGGING LINE ---
+
+    e.preventDefault();
+    setFormError(null);
+
+    const isEdit = modalMode === "edit";
+
+    const url = isEdit
+      ? `http://127.0.0.1:5000/products/${selectedProduct?.id}`
+      : `http://127.0.0.1:5000/products`;
+
+    const method = isEdit ? "PUT" : "POST";
+
+    // 1. Create the payload directly from formData
+    const payload = { ...formData };
+    
+    // 2. Clean out any keys that are undefined (e.g., an empty number input)
+    Object.keys(payload).forEach(key => 
+      (payload as any)[key] === undefined && delete (payload as any)[key]
+    );
+
+    // --- ADD THIS LINE FOR DEBUGGING ---
+    console.log("Sending request:", { method, url, payload });
+    // --- END DEBUGGING LINE ---
+
+    try {
+      const response = await fetch(url, {
+        method: method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      // --- ADD THIS LINE FOR DEBUGGING ---
+      console.log("Received response:", response);
+      // --- END DEBUGGING LINE ---
+
+      if (response.ok) {
+        setFormModalOpen(false);
+        loadProducts(); // Refresh the table
+      } else {
+        const errorData = await response.json();
+        console.error("Server error:", errorData); // Log the error
+        setFormError(errorData.error || "An unknown error occurred.");
+      }
+    } catch (error) {
+      console.error(`Error ${modalMode}ing product:`, error);
+      setFormError("A network error occurred. Please try again.");
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!selectedProduct) return;
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:5000/products/${selectedProduct.id}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (response.ok) {
+        setDeleteAlertOpen(false);
+        setSelectedProduct(null);
+        loadProducts(); // Refresh the table
+      } else {
+        // Handle error (e.g., show a toast)
+        console.error("Failed to delete product");
+      }
+    } catch (error) {
+      console.error("Error deleting product:", error);
+    }
+  };
+
+  // --- End New Modal Handlers ---
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-2 text-sm text-muted-foreground">Loading appliance catalog...</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Loading appliance catalog...
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -210,134 +462,69 @@ export default function ApplianceCatalogPage() {
             Manage your appliance inventory and pricing tiers
           </p>
         </div>
+
         <div className="flex items-center gap-2">
-          <Dialog>
-            <DialogTrigger asChild>
+          <DataImportComponent
+            onImportComplete={loadData}
+            trigger={
               <Button variant="outline">
                 <Upload className="h-4 w-4 mr-2" />
                 Import Data
               </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Import Appliance Data</DialogTitle>
-                <DialogDescription>
-                  Upload Excel files from Appliance Matrix or KBB Pricelist
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium">Import Type</label>
-                  <Select>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select import type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="appliance_matrix">Appliance Matrix</SelectItem>
-                      <SelectItem value="kbb_pricelist">KBB Pricelist</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-sm font-medium">File</label>
-                  <Input type="file" accept=".xlsx,.xls,.csv" />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline">Cancel</Button>
-                <Button>Upload & Import</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <Button onClick={() => router.push('/dashboard/appliances/products/new')}>
+            }
+          />
+          {/* --- MODIFIED BUTTON --- */}
+          <Button onClick={handleAddClick}>
             <Plus className="h-4 w-4 mr-2" />
             Add Product
           </Button>
+          {/* --- END MODIFIED BUTTON --- */}
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center">
-              <div>
-                <p className="text-2xl font-bold">{products.length}</p>
-                <p className="text-xs text-muted-foreground">Total Products</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center">
-              <div>
-                <p className="text-2xl font-bold">{brands.length}</p>
-                <p className="text-xs text-muted-foreground">Brands</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center">
-              <div>
-                <p className="text-2xl font-bold">{categories.length}</p>
-                <p className="text-xs text-muted-foreground">Categories</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center">
-              <div>
-                <p className="text-2xl font-bold">
-                  {products.filter(p => p.in_stock).length}
-                </p>
-                <p className="text-xs text-muted-foreground">In Stock</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <Separator className="my-6" />
 
       {/* Filters */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex-1 min-w-64">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                <Input
-                  placeholder="Search products, model codes, or series..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
+      <div className="space-y-4">
+        {/* Filter Bar */}
+        <div className="flex justify-between items-center gap-4 flex-wrap">
+          <div className="flex-1 min-w-64">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+              <Input
+                placeholder="Search products, model codes, or series..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
             </div>
-            
-            <Select value={selectedBrand} onValueChange={setSelectedBrand}>
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="All Brands" />
-              </SelectTrigger>
-              <SelectContent>
-                
-                {brands.map(brand => (
-                  <SelectItem key={brand.id} value={brand.id.toString()}>
-                    {brand.name} ({brand.product_count})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">
+              {pagination.total} Products
+            </span>
+            <Button
+              variant="outline"
+              onClick={() => setShowFilters(!showFilters)}
+            >
+              <Filter className="h-4 w-4 mr-2" />
+              {showFilters ? "Hide" : "Show"} Other Filters
+            </Button>
+          </div>
+        </div>
 
-            <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+        {/* Collapsible Filter Dropdowns (for Category and Tier) */}
+        {showFilters && (
+          <div className="flex items-center gap-4 flex-wrap p-4 bg-card border rounded-lg">
+            <Select
+              value={selectedCategory}
+              onValueChange={setSelectedCategory}
+            >
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="All Categories" />
               </SelectTrigger>
               <SelectContent>
-                {categories.map(category => (
+                {categories.map((category) => (
                   <SelectItem key={category.id} value={category.id.toString()}>
                     {category.name} ({category.product_count})
                   </SelectItem>
@@ -356,150 +543,384 @@ export default function ApplianceCatalogPage() {
               </SelectContent>
             </Select>
 
-            {(searchTerm || selectedBrand || selectedCategory || selectedTier) && (
-              <Button variant="outline" onClick={clearFilters} size="sm">
-                Clear Filters
+            {(selectedCategory || selectedTier) && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSelectedCategory("");
+                  setSelectedTier("");
+                }}
+                size="sm"
+              >
+                Clear Other Filters
               </Button>
             )}
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </div>
+
+      {/* Checkbox Filters */}
+      <div className="flex items-center gap-6">
+        {QUICK_FILTER_BRANDS.map((brandName) => (
+          <div key={brandName} className="flex items-center space-x-2">
+            <Checkbox
+              id={`brand-${brandName}`}
+              checked={selectedBrands.has(brandName)}
+              onCheckedChange={(checked) =>
+                handleBrandCheckboxChange(brandName, checked)
+              }
+            />
+            <Label
+              htmlFor={`brand-${brandName}`}
+              className="text-sm font-medium leading-none cursor-pointer"
+            >
+              {brandName}
+            </Label>
+          </div>
+        ))}
+      </div>
 
       {/* Products Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Products ({pagination.total})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Model Code</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Brand</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Series</TableHead>
-                  <TableHead>Base Price</TableHead>
-                  <TableHead>Tier Pricing</TableHead>
-                  <TableHead>Stock Status</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {products.map((product) => (
-                  <TableRow key={product.id}>
-                    <TableCell className="font-medium">
-                      {product.model_code}
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium">{product.name}</p>
-                        {product.pack_name && (
-                          <p className="text-xs text-muted-foreground">
-                            Pack: {product.pack_name}
-                          </p>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>{product.brand?.name}</TableCell>
-                    <TableCell>{product.category?.name}</TableCell>
-                    <TableCell>{product.series || "—"}</TableCell>
-                    <TableCell>{formatPrice(product.pricing.base_price)}</TableCell>
-                    <TableCell>
-                      <div className="space-y-1 text-xs">
-                        <div className="flex justify-between">
-                          <span>Low:</span>
-                          <span>{formatPrice(product.pricing.low_tier_price)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Mid:</span>
-                          <span>{formatPrice(product.pricing.mid_tier_price)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>High:</span>
-                          <span>{formatPrice(product.pricing.high_tier_price)}</span>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <Badge variant={product.active ? "default" : "secondary"}>
-                          {product.active ? "Active" : "Inactive"}
-                        </Badge>
-                        <Badge variant={product.in_stock ? "outline" : "destructive"}>
-                          {product.in_stock ? "In Stock" : "Out of Stock"}
-                        </Badge>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => router.push(`/dashboard/appliances/products/${product.id}`)}
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => router.push(`/dashboard/appliances/products/${product.id}/edit`)}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            if (confirm('Are you sure you want to deactivate this product?')) {
-                              // Handle delete/deactivate
-                            }
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+      <div>
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/50">
+                <TableHead className="h-14 px-2">Model Code</TableHead>
+                <TableHead className="h-14 px-2">Name</TableHead>
+                <TableHead className="h-14 px-2">Brand</TableHead>
+                <TableHead className="h-14 px-2">Series</TableHead>
+                <TableHead className="h-14 px-2">Tier</TableHead>
+                <TableHead className="h-14 px-2">Base Price</TableHead>
+                <TableHead className="h-14 px-4">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {products.map((product) => (
+                // --- MODIFIED TABLEROW ---
+                <TableRow
+                  key={product.id}
+                  onClick={() => handleViewClick(product)}
+                  className="cursor-pointer hover:bg-muted/50"
+                >
+                  <TableCell className="font-medium">
+                    {product.model_code}
+                  </TableCell>
+                  <TableCell>
+                    <div>
+                      <p className="font-medium">{product.name}</p>
+                      {product.pack_name && (
+                        <p className="text-xs text-muted-foreground">
+                          Pack: {product.pack_name}
+                        </p>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>{product.brand?.name}</TableCell>
+                  <TableCell>{product.series || "—"}</TableCell>
+                  <TableCell>{getProductTierTag(product)}</TableCell>
+                  <TableCell>
+                    {formatPrice(product.pricing.base_price)}
+                  </TableCell>
 
-          {/* Pagination */}
-          {pagination.pages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-muted-foreground">
-                Showing {((pagination.page - 1) * pagination.per_page) + 1} to{' '}
-                {Math.min(pagination.page * pagination.per_page, pagination.total)} of{' '}
-                {pagination.total} results
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={pagination.page <= 1}
-                  onClick={() => setPagination(prev => ({ ...prev, page: prev.page - 1 }))}
+                  {/* --- MODIFIED TABLECELL (ACTIONS) --- */}
+                  <TableCell
+                    onClick={(e) => e.stopPropagation()}
+                    className="cursor-default"
+                  >
+                    <div className="flex items-center gap-1">
+                      {/* Eye button removed */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation(); // Stop click from bubbling to the row
+                          handleEditClick(product);
+                        }}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation(); // Stop click from bubbling to the row
+                          handleDeleteClick(product);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                  {/* --- END MODIFIED TABLECELL --- */}
+                </TableRow>
+                // --- END MODIFIED TABLEROW ---
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* Pagination */}
+        {pagination.pages > 1 && (
+          <div className="flex items-center justify-between mt-4">
+            <p className="text-sm text-muted-foreground">
+              Showing {((pagination.page - 1) * pagination.per_page) + 1} to{" "}
+              {Math.min(
+                pagination.page * pagination.per_page,
+                pagination.total
+              )}{" "}
+              of {pagination.total} results
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pagination.page <= 1}
+                onClick={() =>
+                  setPagination((prev) => ({ ...prev, page: prev.page - 1 }))
+                }
+              >
+                Previous
+              </Button>
+              <span className="text-sm">
+                Page {pagination.page} of {pagination.pages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pagination.page >= pagination.pages}
+                onClick={() =>
+                  setPagination((prev) => ({ ...prev, page: prev.page + 1 }))
+                }
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* --- NEW MODALS --- */}
+
+      {/* Add/Edit Product Modal */}
+      <Dialog open={formModalOpen} onOpenChange={setFormModalOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {modalMode === "add" ? "Add New Product" : "Edit Product"}
+            </DialogTitle>
+            <DialogDescription>
+              {modalMode === "add"
+                ? "Fill in the details for the new product."
+                : `Editing: ${selectedProduct?.name} (${selectedProduct?.model_code})`}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="model_code">Model Code *</Label>
+                <Input
+                  id="model_code"
+                  name="model_code"
+                  value={formData.model_code}
+                  onChange={handleFormChange}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="name">Name *</Label>
+                <Input
+                  id="name"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleFormChange}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="brand_id">Brand *</Label>
+                <Select
+                  value={formData.brand_id?.toString()}
+                  onValueChange={(value) =>
+                    handleSelectChange("brand_id", value)
+                  }
+                  required
                 >
-                  Previous
-                </Button>
-                <span className="text-sm">
-                  Page {pagination.page} of {pagination.pages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={pagination.page >= pagination.pages}
-                  onClick={() => setPagination(prev => ({ ...prev, page: prev.page + 1 }))}
+                  <SelectTrigger id="brand_id">
+                    <SelectValue placeholder="Select a brand" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {brands.map((brand) => (
+                      <SelectItem key={brand.id} value={brand.id.toString()}>
+                        {brand.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="category_id">Category *</Label>
+                <Select
+                  value={formData.category_id?.toString()}
+                  onValueChange={(value) =>
+                    handleSelectChange("category_id", value)
+                  }
+                  required
                 >
-                  Next
-                </Button>
+                  <SelectTrigger id="category_id">
+                    <SelectValue placeholder="Select a category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((category) => (
+                      <SelectItem
+                        key={category.id}
+                        value={category.id.toString()}
+                      >
+                        {category.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="series">Series</Label>
+                <Input
+                  id="series"
+                  name="series"
+                  value={formData.series}
+                  onChange={handleFormChange}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pack_name">Pack Name</Label>
+                <Input
+                  id="pack_name"
+                  name="pack_name"
+                  value={formData.pack_name}
+                  onChange={handleFormChange}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="base_price">Base Price (£)</Label>
+                <Input
+                  id="base_price"
+                  name="base_price"
+                  type="number"
+                  step="0.01"
+                  value={formData.base_price || ""}
+                  onChange={handleFormChange}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="low_tier_price">Low Tier Price (£)</Label>
+                <Input
+                  id="low_tier_price"
+                  name="low_tier_price"
+                  type="number"
+                  step="0.01"
+                  value={formData.low_tier_price || ""}
+                  onChange={handleFormChange}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mid_tier_price">Mid Tier Price (£)</Label>
+                <Input
+                  id="mid_tier_price"
+                  name="mid_tier_price"
+                  type="number"
+                  step="0.01"
+                  value={formData.mid_tier_price || ""}
+                  onChange={handleFormChange}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="high_tier_price">High Tier Price (£)</Label>
+                <Input
+                  id="high_tier_price"
+                  name="high_tier_price"
+                  type="number"
+                  step="0.01"
+                  value={formData.high_tier_price || ""}
+                  onChange={handleFormChange}
+                />
               </div>
             </div>
-          )}
-        </CardContent>
-      </Card>
+
+            {formError && (
+              <p className="text-sm text-red-600">{formError}</p>
+            )}
+
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="outline">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button type="submit">
+                {modalMode === "add" ? "Create Product" : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Product Modal */}
+      <Dialog open={viewModalOpen} onOpenChange={setViewModalOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedProduct?.name}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedProduct?.model_code} | {selectedProduct?.brand?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p><strong>Category:</strong> {selectedProduct?.category?.name}</p>
+            <p><strong>Series:</strong> {selectedProduct?.series || "N/A"}</p>
+            <p><strong>Pack Name:</strong> {selectedProduct?.pack_name || "N/A"}</p>
+            <Separator />
+            <h4 className="font-semibold">Pricing</h4>
+            <p><strong>Base Price:</strong> {formatPrice(selectedProduct?.pricing.base_price)}</p>
+            <p><strong>Low Tier:</strong> {formatPrice(selectedProduct?.pricing.low_tier_price)}</p>
+            <p><strong>Mid Tier:</strong> {formatPrice(selectedProduct?.pricing.mid_tier_price)}</p>
+            <p><strong>High Tier:</strong> {formatPrice(selectedProduct?.pricing.high_tier_price)}</p>
+            <Separator />
+            <p><strong>Energy Rating:</strong> {selectedProduct?.energy_rating || "N/A"}</p>
+            <p><strong>Warranty:</strong> {selectedProduct?.warranty_years ? `${selectedProduct.warranty_years} years` : "N/A"}</p>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Close</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteAlertOpen} onOpenChange={setDeleteAlertOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action will deactivate the product:
+              <br />
+              <strong>{selectedProduct?.name} ({selectedProduct?.model_code})</strong>
+              <br />
+              This product will be hidden but not permanently deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete}>
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {/* --- END NEW MODALS --- */}
     </div>
   );
 }

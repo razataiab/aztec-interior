@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 
+// --- CurrencyInput component remains the same ---
+
 interface CurrencyInputProps {
     value: string;
     onChange: (value: string) => void;
@@ -74,18 +76,30 @@ const getNextInvoiceNumber = (lastNumber: string): string => {
 };
 
 export default function InvoicePage() {
+    // 1. User role state
+    const [userRole, setUserRole] = useState<string | null>(null);
+
+    // Initial approval status must be 'pending' or null, so it only changes after save/check
     const [invoiceNumber, setInvoiceNumber] = useState("INV-0001");
     const [submissionId, setSubmissionId] = useState<number | null>(null);
-    const [approvalStatus, setApprovalStatus] = useState<string>('pending');
+    const [approvalStatus, setApprovalStatus] = useState<string>('pending'); // Default to pending
     const [rejectionReason, setRejectionReason] = useState<string>('');
 
+    // --- Role and Invoice Number Setup ---
     useEffect(() => {
         if (typeof window !== 'undefined') {
+            // Fetch the user role (e.g., from local storage)
+            const storedRole = localStorage.getItem('user_role');
+            setUserRole(storedRole || 'manager'); // <<< MOCK: Replace 'manager' with a proper default/null
+
             const lastUsedNumber = localStorage.getItem('lastInvoiceNumber') || "INV-0000";
             const nextNumber = getNextInvoiceNumber(lastUsedNumber);
             setInvoiceNumber(nextNumber);
+            
+            // Note: We deliberately do NOT set approvalStatus here. It should be pending/unknown until saved.
         }
     }, []); 
+    // ------------------------------------
 
     const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
     const [dueDate, setDueDate] = useState(() => {
@@ -157,61 +171,95 @@ export default function InvoicePage() {
         subTotal,
         vatAmount,
         totalAmount,
-        submission_id: submissionId, // Include for download check
-    }), [customer, invoiceNumber, invoiceDate, dueDate, items, vatRate, subTotal, vatAmount, totalAmount, submissionId]);
+        submission_id: submissionId,
+        userRole: userRole,
+    }), [customer, invoiceNumber, invoiceDate, dueDate, items, vatRate, subTotal, vatAmount, totalAmount, submissionId, userRole]);
 
     const handleSave = async () => {
-        setIsSaving(true);
-        setMessage("Saving invoice...");
-
-        try {
-            // Get the token from localStorage with the correct key
-            const token = localStorage.getItem('auth_token');
-            
-            if (!token) {
-                setMessage('❌ You must be logged in to save invoices.');
-                setIsSaving(false);
+            if (!userRole) {
+                setMessage('❌ User role not determined. Cannot save.');
                 return;
             }
 
-            const response = await fetch('http://127.0.0.1:5000/invoices/save', {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // Add the token here
-                },
-                body: JSON.stringify(getInvoiceData()),
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                if (typeof window !== 'undefined') {
-                    localStorage.setItem('lastInvoiceNumber', invoiceNumber);
-                }
-                
-                // Store submission ID and approval status
-                setSubmissionId(data.form_submission_id);
-                setApprovalStatus(data.approval_status || 'pending');
-                
-                if (data.approval_status === 'pending') {
-                    setMessage('✅ Invoice saved and sent to manager for approval!');
-                } else {
-                    setMessage('✅ Invoice saved successfully!');
-                }
-            } else {
-                setMessage(`❌ Error: ${data.error || 'Failed to save invoice.'}`);
+            setIsSaving(true);
+            setMessage("Saving invoice...");
+            
+            // 🚨 CRITICAL CHANGE HERE: Optimistically set status for manager
+            // This ensures the status badge updates instantly before the network call resolves.
+            if (userRole === 'manager') {
+                setApprovalStatus('approved');
+                setMessage('Saving invoice... (Auto-approving as Manager)');
             }
-        } catch (error) {
-            setMessage('❌ Network error. Could not connect to server.');
-        } finally {
-            setIsSaving(false);
-            setTimeout(() => setMessage(""), 5000);
-        }
-    };
+
+            try {
+                const token = localStorage.getItem('auth_token');
+                
+                if (!token) {
+                    setMessage('❌ You must be logged in to save invoices.');
+                    setIsSaving(false);
+                    return;
+                }
+
+                const invoiceData = getInvoiceData();
+                
+                const response = await fetch('http://127.0.0.1:5000/invoices/save', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(invoiceData),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (typeof window !== 'undefined') {
+                        localStorage.setItem('lastInvoiceNumber', invoiceNumber);
+                    }
+                    
+                    // Set submission ID
+                    setSubmissionId(data.form_submission_id);
+                    
+                    // 🔄 FINAL STATUS CHECK: Update status from server, or use local 'approved' for manager
+                    let newApprovalStatus = data.approval_status;
+                    if (!newApprovalStatus) {
+                        newApprovalStatus = userRole === 'manager' ? 'approved' : 'pending';
+                    }
+                    setApprovalStatus(newApprovalStatus);
+                    
+                    if (newApprovalStatus === 'pending') {
+                        setMessage('✅ Invoice saved and sent for approval!');
+                    } else if (newApprovalStatus === 'approved') {
+                        setMessage('✅ Invoice saved and automatically **approved** (Manager role)!');
+                    } else {
+                        setMessage('✅ Invoice saved successfully!');
+                    }
+                } else {
+                    // If save fails, revert optimistic change (only for manager)
+                    if (userRole === 'manager') {
+                        setApprovalStatus('pending'); 
+                    }
+                    setMessage(`❌ Error: ${data.error || 'Failed to save invoice.'}`);
+                }
+            } catch (error) {
+                // If save fails, revert optimistic change (only for manager)
+                if (userRole === 'manager') {
+                    setApprovalStatus('pending'); 
+                }
+                setMessage('❌ Network error. Could not connect to server.');
+            } finally {
+                setIsSaving(false);
+                setTimeout(() => setMessage(""), 5000);
+            }
+        };
 
     // Check approval status before download
     const checkApprovalStatus = async () => {
+        if (approvalStatus === 'approved') {
+            return true;
+        }
+        
         if (!submissionId) {
             setMessage('⚠️ Please save the invoice first.');
             return false;
@@ -240,7 +288,6 @@ export default function InvoicePage() {
     };
     
     const handleDownloadPdf = async () => {
-        // Check approval status first
         const canDownload = await checkApprovalStatus();
         if (!canDownload) {
             setTimeout(() => setMessage(""), 5000);
@@ -285,24 +332,15 @@ export default function InvoicePage() {
     return (
         <div className="bg-gray-50 min-h-screen p-4 sm:p-8 font-sans">
         <div className="max-w-5xl mx-auto">
+            {/* 3. Remove/Hide the save/download/print buttons from the top */}
             <div className="flex justify-between items-center mb-6 no-print">
                 <Button variant="outline" onClick={() => window.history.back()}>
                     <ArrowLeft className="h-4 w-4 mr-2" /> Back
                 </Button>
-                <div className="flex items-center space-x-2">
-                    <Button onClick={handleSave} disabled={isSaving} className="bg-slate-800 hover:bg-slate-700 text-white">
-                        <Save className="h-4 w-4 mr-2" /> {isSaving ? "Saving..." : "Save"}
-                    </Button>
-                    <Button variant="secondary" onClick={handleDownloadPdf}>
-                        <Download className="h-4 w-4 mr-2" /> Download
-                    </Button>
-                    <Button onClick={handlePrint} variant="outline">
-                        <Printer className="h-4 w-4 mr-2" /> Print
-                    </Button>
-                </div>
+                {/* Removed action buttons from here */}
             </div>
 
-            {/* Approval Status Badge */}
+            {/* 2. Approval Status Badge is now ONLY shown if a submissionId exists */}
             {submissionId && (
                 <div className={`mb-4 p-3 rounded-lg border-l-4 ${
                     approvalStatus === 'approved' ? 'bg-green-50 border-green-500' :
@@ -317,6 +355,7 @@ export default function InvoicePage() {
                         }`} />
                         <span className="font-medium">
                             Status: <span className="capitalize">{approvalStatus}</span>
+                            {userRole && <span className="text-sm text-gray-500 ml-2">({userRole} role)</span>}
                         </span>
                     </div>
                     {approvalStatus === 'rejected' && rejectionReason && (
@@ -340,6 +379,7 @@ export default function InvoicePage() {
             )}
 
             <Card className="shadow-lg rounded-xl print:shadow-none print:border-0">
+                {/* ... CardHeader and CardContent remain the same */}
                 <CardHeader className="bg-slate-800 text-white p-8 rounded-t-xl">
                     <div className="flex justify-between items-start">
                         <div>
@@ -455,7 +495,26 @@ export default function InvoicePage() {
                     </div>
 
                 </CardContent>
-                <CardFooter className="bg-gray-50 p-6 text-center text-xs text-gray-500 rounded-b-xl">
+                {/* 4. Move action buttons to CardFooter for better flow and placement */}
+                <CardFooter className="flex justify-between items-center bg-gray-100 p-6 rounded-b-xl no-print">
+                    <div className="flex-1 text-sm text-gray-500 hidden sm:block">
+                        <p>Draft Mode. Click "Save" to finalize and process the invoice.</p>
+                    </div>
+                    <div className="flex space-x-2">
+                        <Button onClick={handleSave} disabled={isSaving} className="bg-slate-800 hover:bg-slate-700 text-white">
+                            <Save className="h-4 w-4 mr-2" /> {isSaving ? "Saving..." : "Save"}
+                        </Button>
+                        <Button variant="secondary" onClick={handleDownloadPdf}>
+                            <Download className="h-4 w-4 mr-2" /> Download
+                        </Button>
+                        <Button onClick={handlePrint} variant="outline">
+                            <Printer className="h-4 w-4 mr-2" /> Print
+                        </Button>
+                    </div>
+                </CardFooter>
+                
+                {/* Original Bank Details footer now separate */}
+                <CardFooter className="bg-gray-50 p-6 text-center text-xs text-gray-500">
                     <div className="w-full">
                         <p className="font-semibold mb-1">Bank Transfer Details</p>
                         <p>Acc Name: Aztec Interiors Leicester LTD | Bank: HSBC</p>

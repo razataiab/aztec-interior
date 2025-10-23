@@ -13,6 +13,7 @@ import { setValueToCookie } from "@/server/server-actions";
 import { usePreferencesStore } from "@/stores/preferences/preferences-provider";
 import type { SidebarVariant, SidebarCollapsible, ContentLayout } from "@/types/preferences/layout";
 import { THEME_PRESET_OPTIONS, type ThemePreset, type ThemeMode } from "@/types/preferences/theme";
+import { NotificationBell } from "@/components/ui/NotificationBell";
 
 type LayoutControlsProps = {
   readonly variant: SidebarVariant;
@@ -47,6 +48,7 @@ export function LayoutControls(props: LayoutControlsProps) {
 
   return (
     <Popover>
+      <NotificationBell />
       <PopoverTrigger asChild>
         <Button size="icon">
           <Settings />

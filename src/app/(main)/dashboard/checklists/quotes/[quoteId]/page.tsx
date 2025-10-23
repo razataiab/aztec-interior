@@ -3,10 +3,49 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { 
+  ArrowLeft, 
+  Download, 
+  Printer, 
+  CheckCircle, 
+  Clock, 
+  XCircle, 
+  AlertCircle,
+  Trash2,
+  Loader2
+} from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
-// Format date to readable format
+interface QuoteItem {
+  id: number;
+  item: string;
+  description: string;
+  color: string;
+  amount: number;
+}
+
+interface Quote {
+  id: number;
+  customer_id: string;
+  customer_name: string;
+  total: number;
+  status: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+  items: QuoteItem[];
+}
+
 const formatDate = (dateString: string) => {
   if (!dateString) return "—";
   try {
@@ -21,114 +60,466 @@ const formatDate = (dateString: string) => {
   }
 };
 
+const formatCurrency = (amount: number) => {
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP'
+  }).format(amount || 0);
+};
+
 export default function QuoteDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const quoteId = params?.quoteId;
-  const [quotation, setQuotation] = useState<any | null>(null);
+  
+  // Handle both [id] and [quoteId] route parameters
+  const quoteId = (params?.quoteId || params?.id) as string;
+  
+  const [quotation, setQuotation] = useState<Quote | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   useEffect(() => {
-    if (!quoteId) return;
-    setLoading(true);
-
-    // Fetch quotation details
-    fetch(`http://127.0.0.1:5000/quotations/${quoteId}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch quotation");
-        return res.json();
-      })
-      .then((data) => setQuotation(data))
-      .catch((err) => console.error("Error loading quotation:", err))
-      .finally(() => setLoading(false));
+    console.log('Route params:', params);
+    console.log('Quote ID:', quoteId);
+    
+    if (!quoteId) {
+      setError('No quote ID provided');
+      setLoading(false);
+      return;
+    }
+    loadQuotation();
   }, [quoteId]);
 
-  const handleBack = () => {
-    router.push("/dashboard/quotes");
+  const loadQuotation = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      console.log('Fetching quotation:', quoteId);
+
+      const response = await fetch(`http://127.0.0.1:5000/quotations/${quoteId}`, {
+        headers
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to load quotation');
+      }
+
+      const data = await response.json();
+      console.log('Quotation loaded:', data);
+      setQuotation(data);
+    } catch (err) {
+      console.error('Error loading quotation:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load quotation');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  if (loading) return <div className="p-8">Loading...</div>;
-  if (!quotation) return <div className="p-8">Quotation not found.</div>;
+  const handleDownloadPDF = async () => {
+    setDownloading(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: HeadersInit = {};
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      console.log('Downloading PDF for quotation:', quoteId);
+
+      const response = await fetch(`http://127.0.0.1:5000/quotations/${quoteId}/pdf`, {
+        headers
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to generate PDF');
+      }
+
+      // Get the blob
+      const blob = await response.blob();
+      
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `quotation-${quoteId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      console.log('PDF downloaded successfully');
+    } catch (err) {
+      console.error('Error downloading PDF:', err);
+      alert(`Failed to download PDF: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      console.log('Deleting quotation:', quoteId);
+
+      const response = await fetch(`http://127.0.0.1:5000/quotations/${quoteId}`, {
+        method: 'DELETE',
+        headers
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to delete quotation');
+      }
+
+      console.log('Quotation deleted successfully');
+      
+      // Navigate back to customer details or quotes list
+      router.back();
+    } catch (err) {
+      console.error('Error deleting quotation:', err);
+      alert(`Failed to delete quotation: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setDeleting(false);
+      setShowDeleteDialog(false);
+    }
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'approved':
+        return <CheckCircle className="h-5 w-5 text-green-600" />;
+      case 'pending':
+      case 'draft':
+        return <Clock className="h-5 w-5 text-yellow-600" />;
+      case 'rejected':
+        return <XCircle className="h-5 w-5 text-red-600" />;
+      default:
+        return <AlertCircle className="h-5 w-5 text-gray-600" />;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'approved':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'pending':
+      case 'draft':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'rejected':
+        return 'bg-red-100 text-red-800 border-red-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading quotation...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !quotation) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <XCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Error Loading Quotation</h2>
+          <p className="text-gray-600 mb-4">{error || 'Quotation not found'}</p>
+          <Button onClick={() => router.back()}>
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Go Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Header */}
-      <div className="border-b border-gray-200 bg-white px-8 py-6">
+    <div className="min-h-screen bg-gray-50">
+      {/* Header - Print Hidden */}
+      <div className="border-b bg-white px-8 py-4 print:hidden">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="ghost"
-              onClick={handleBack}
-              className="flex items-center text-gray-500 hover:text-gray-700"
-            >
-              <ArrowLeft className="h-5 w-5 mr-2" />
-              Back
+          <div className="flex items-center space-x-4">
+            <Button variant="ghost" onClick={() => router.back()}>
+              <ArrowLeft className="h-4 w-4" />
             </Button>
-            <h1 className="text-3xl font-semibold text-gray-900">Quote #{quotation.id}</h1>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Quotation #{quotation.id}</h1>
+              <p className="text-sm text-gray-600">
+                Created {formatDate(quotation.created_at)}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-3">
+            <Button 
+              variant="outline" 
+              onClick={handlePrint}
+              className="border-gray-300"
+            >
+              <Printer className="h-4 w-4 mr-2" />
+              Print
+            </Button>
+            
+            <Button 
+              variant="outline"
+              onClick={handleDownloadPDF} 
+              disabled={downloading}
+              className="border-blue-300 text-blue-600 hover:bg-blue-50"
+            >
+              {downloading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Download className="h-4 w-4 mr-2" />
+                  Download PDF
+                </>
+              )}
+            </Button>
+            
+            <Button 
+              variant="outline"
+              onClick={() => setShowDeleteDialog(true)}
+              disabled={deleting}
+              className="border-red-300 text-red-600 hover:bg-red-50"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete
+            </Button>
           </div>
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="px-8 py-6">
+      {/* Print-only header */}
+      <div className="hidden print:block border-b-2 border-gray-800 pb-4 mb-6 px-8 pt-6">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold mb-2">QUOTATION</h1>
+          <p className="text-lg text-gray-700">Quotation #{quotation.id}</p>
+          <p className="text-sm text-gray-600 mt-1">{formatDate(quotation.created_at)}</p>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="px-8 py-6 max-w-5xl mx-auto">
+        {/* Status Badge */}
+        {quotation.status && (
+          <div className="mb-6 flex items-center space-x-3">
+            <div className={`inline-flex items-center space-x-2 px-4 py-2 rounded-md border ${getStatusColor(quotation.status)}`}>
+              {getStatusIcon(quotation.status)}
+              <span className="font-semibold capitalize">{quotation.status}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Customer Information */}
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>Quotation Details</CardTitle>
+            <CardTitle>Customer Information</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
-              <div className="flex flex-col">
-                <span className="text-sm text-gray-500 font-medium">Customer</span>
-                <span className="text-gray-900 mt-1 text-base">{quotation.customer_name || "—"}</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <p className="text-sm text-gray-600 font-medium mb-1">Customer Name</p>
+                <p className="text-base text-gray-900">{quotation.customer_name || '—'}</p>
               </div>
-              <div className="flex flex-col">
-                <span className="text-sm text-gray-500 font-medium">Created</span>
-                <span className="text-gray-900 mt-1 text-base">{formatDate(quotation.created_at)}</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-sm text-gray-500 font-medium">Total</span>
-                <p className="text-sm text-gray-500">Total: £{Number(quotation.total)?.toFixed(2) ?? "—"}</p>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-sm text-gray-500 font-medium">Notes</span>
-                <span className="text-gray-900 mt-1 text-base">{quotation.notes || "—"}</span>
+              <div>
+                <p className="text-sm text-gray-600 font-medium mb-1">Customer ID</p>
+                <p className="text-base text-gray-900 font-mono text-xs">{quotation.customer_id}</p>
               </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Quote Items */}
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>Items</CardTitle>
+            <CardTitle>Quote Items</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {quotation.items.map((item: any) => (
-                <div key={item.id} className="p-4 border rounded-lg bg-gray-50">
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div>
-                      <span className="text-sm text-gray-500 font-medium">Item</span>
-                      <p className="text-gray-900">{item.item}</p>
-                    </div>
-                    <div>
-                      <span className="text-sm text-gray-500 font-medium">Description</span>
-                      <p className="text-gray-900">{item.description || "—"}</p>
-                    </div>
-                    <div>
-                      <span className="text-sm text-gray-500 font-medium">Color</span>
-                      <p className="text-gray-900">{item.color || "—"}</p>
-                    </div>
-                    <div>
-                      <span className="text-sm text-gray-500 font-medium">Amount</span>
-                      <p className="text-gray-900">£{item.amount.toFixed(2)}</p>
-                    </div>
-                  </div>
+            {quotation.items && quotation.items.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Item
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Description
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Color
+                      </th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Amount
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {quotation.items.map((item, index) => (
+                      <tr key={item.id || index} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                          {item.item || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-900">
+                          {item.description || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-900">
+                          {item.color || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-900 text-right font-semibold">
+                          {formatCurrency(item.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-gray-500 text-center py-8">No items in this quotation</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Quote Summary */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Quote Summary</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center pb-3 border-b border-gray-200">
+                <span className="text-lg font-medium text-gray-600">Total Amount</span>
+                <span className="text-3xl font-bold text-gray-900">
+                  {formatCurrency(quotation.total)}
+                </span>
+              </div>
+              
+              {quotation.notes && (
+                <div className="pt-3">
+                  <p className="text-sm text-gray-600 font-medium mb-2">Notes</p>
+                  <p className="text-gray-900 whitespace-pre-wrap bg-gray-50 p-3 rounded-md">
+                    {quotation.notes}
+                  </p>
                 </div>
-              ))}
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Metadata */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Quotation Details</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <p className="text-sm text-gray-600 font-medium mb-1">Quotation Number</p>
+                <p className="text-base text-gray-900 font-semibold">#{quotation.id}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 font-medium mb-1">Status</p>
+                <p className="text-base text-gray-900 capitalize font-medium">
+                  {quotation.status || 'Draft'}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 font-medium mb-1">Created Date</p>
+                <p className="text-base text-gray-900">{formatDate(quotation.created_at)}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 font-medium mb-1">Last Updated</p>
+                <p className="text-base text-gray-900">{formatDate(quotation.updated_at)}</p>
+              </div>
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Quotation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete Quotation #{quotation.id}? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Print Styles */}
+      <style jsx>{`
+        @media print {
+          .print\\:hidden {
+            display: none !important;
+          }
+          .print\\:block {
+            display: block !important;
+          }
+          body {
+            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact;
+          }
+          @page {
+            margin: 1cm;
+          }
+        }
+      `}</style>
     </div>
   );
 }

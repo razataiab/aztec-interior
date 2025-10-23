@@ -35,6 +35,7 @@ import {
   DollarSign,
   Trash2,
   AlertCircle,
+  Eye,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -65,6 +66,18 @@ interface FormSubmission {
   token_used: string;
   submitted_at: string;
   form_data: any;
+}
+
+interface FinancialDocument {
+  id: string;
+  type: "invoice" | "proforma" | "receipt" | "deposit" | "final" | "terms";
+  title: string;
+  total?: number;
+  amount_paid?: number;
+  balance?: number;
+  created_at: string;
+  created_by: string;
+  form_submission_id?: number;
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -134,6 +147,15 @@ const FIELD_LABELS: Record<string, string> = {
 
 const FINANCIAL_FIELDS = ["amount_paid", "total_paid_to_date", "total_amount", "balance_to_pay"];
 
+const FINANCIAL_DOCUMENT_ICONS: Record<string, React.ReactNode> = {
+  invoice: <FileText className="h-4 w-4 text-blue-600" />,
+  proforma: <FileText className="h-4 w-4 text-indigo-600" />,
+  receipt: <Receipt className="h-4 w-4 text-green-600" />,
+  deposit: <Receipt className="h-4 w-4 text-emerald-600" />,
+  final: <Receipt className="h-4 w-4 text-teal-600" />,
+  terms: <DollarSign className="h-4 w-4 text-purple-600" />,
+};
+
 const formatDate = (dateString: string) => {
   if (!dateString) return "—";
   try {
@@ -158,7 +180,7 @@ export default function CustomerDetailsPage() {
   const { user } = useAuth();
   const id = params?.id as string;
   const [customer, setCustomer] = useState<Customer | null>(null);
-  const [quotations, setQuotations] = useState<any[]>([]);
+  const [financialDocs, setFinancialDocs] = useState<FinancialDocument[]>([]);
   const [jobs, setJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showLinkDialog, setShowLinkDialog] = useState(false);
@@ -178,22 +200,52 @@ export default function CustomerDetailsPage() {
     loadCustomerData();
   }, [id, user]);
 
+  useEffect(() => {
+    if (!id) return;
+    
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('Page became visible, reloading financial docs...');
+        loadFinancialDocuments();
+      }
+    };
+
+    const handleFocus = () => {
+      console.log('Window focused, reloading financial docs...');
+      loadFinancialDocuments();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [id]);
+
   const loadCustomerData = () => {
     setLoading(true);
-
-    fetch(`http://127.0.0.1:5000/customers/${id}`)
+    
+    const token = localStorage.getItem('auth_token');
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  
+    // Fetch customer data
+    fetch(`http://127.0.0.1:5000/customers/${id}`, { headers })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch customer");
         return res.json();
       })
       .then((data) => {
-        // --- START MODIFICATION 1/2: Sales can view customer data ---
         if (user?.role === "Sales" && data.created_by !== user.id && data.salesperson !== user.name) {
-          // If the user is Sales, they can view ANY customer (set hasAccess to true), 
-          // but their edit/creation rights will be limited by the canEdit function below.
           setHasAccess(true); 
         } else if (user?.role === "Staff") {
-          // Staff role only gets access to their assigned customer/created customer.
           const hasPermission = data.created_by === user.id || data.salesperson === user.name;
           setHasAccess(hasPermission);
           if (!hasPermission) {
@@ -201,29 +253,23 @@ export default function CustomerDetailsPage() {
             return;
           }
         } else {
-            setHasAccess(true); // Manager/HR/Other roles have full access
+          setHasAccess(true);
         }
-        // --- END MODIFICATION 1/2 ---
         
         setCustomer(data);
       })
       .catch((err) => console.error("Error loading customer:", err));
-
-    fetch(`http://127.0.0.1:5000/quotations?customer_id=${id}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch quotations");
-        return res.json();
-      })
-      .then((data) => setQuotations(data))
-      .catch((err) => console.error("Error loading quotations:", err));
-
-    fetch(`http://127.0.0.1:5000/jobs?customer_id=${id}`)
+    
+    // Load financial documents
+    loadFinancialDocuments();
+    
+    // Fetch jobs
+    fetch(`http://127.0.0.1:5000/jobs?customer_id=${id}`, { headers })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch jobs");
         return res.json();
       })
       .then((data) => {
-        // Filter jobs based on role - Sales can only see jobs up to Quoted stage
         if (user?.role === "Sales") {
           const salesStages = ['Lead', 'Quote', 'Consultation', 'Survey', 'Measure', 'Design', 'Quoted'];
           const filteredJobs = data.filter((job: any) => salesStages.includes(job.stage));
@@ -236,23 +282,77 @@ export default function CustomerDetailsPage() {
       .finally(() => setLoading(false));
   };
 
+  const loadFinancialDocuments = () => {
+    const token = localStorage.getItem('auth_token');
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    console.log('Fetching financial documents for customer:', id);
+    
+    // Fetch from multiple endpoints and combine
+    Promise.all([
+      fetch(`http://127.0.0.1:5000/invoices?customer_id=${id}`, { headers }).catch(() => ([] as any[])),
+      fetch(`http://127.0.0.1:5000/quotations?customer_id=${id}`, { headers }).catch(() => ([] as any[])),
+    ])
+    .then(async ([invoicesRes, quotesRes]) => {
+      let invoices: any[] = [];
+      let quotes: any[] = [];
+      
+      if (invoicesRes && invoicesRes.ok) {
+        invoices = await invoicesRes.json();
+      }
+      if (quotesRes && quotesRes.ok) {
+        quotes = await quotesRes.json();
+      }
+      
+      // Transform into unified format
+      const docs: FinancialDocument[] = [
+        ...invoices.map((inv: any) => ({
+          id: inv.id,
+          type: "invoice" as const,
+          title: `Invoice #${inv.id}`,
+          total: inv.total,
+          amount_paid: inv.amount_paid,
+          balance: inv.balance,
+          created_at: inv.created_at,
+          created_by: inv.created_by,
+        })),
+        ...quotes.map((quote: any) => ({
+          id: quote.id,
+          type: "proforma" as const,
+          title: `Quote #${quote.id}`,
+          total: quote.total,
+          amount_paid: 0,
+          balance: quote.total,
+          created_at: quote.created_at,
+          created_by: quote.created_by,
+        })),
+      ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      
+      setFinancialDocs(docs);
+    })
+    .catch((err) => console.error("Error loading financial documents:", err));
+  };
+
   const canEdit = (): boolean => {
     if (!customer) return false;
-    if (user?.role === "Manager" || user?.role === "HR") return true;
+    if (user?.role === "Manager" || user?.role === "HR" || user?.role === "Production") return true;
     if (user?.role === "Sales") {
-      // Sales can ONLY edit/create if they own the customer or are the salesperson
-      return customer.created_by === user.id || customer.salesperson === user.name;
+      return customer.created_by === String(user.id) || customer.salesperson === user.name;
     }
     return false;
   };
 
   const canDelete = (): boolean => {
-    // Only Manager and HR can delete
     return user?.role === "Manager" || user?.role === "HR";
   };
 
   const canCreateFinancialDocs = (): boolean => {
-    // Sales can create receipts/invoices but they need approval
     return user?.role !== "Staff";
   };
 
@@ -486,7 +586,6 @@ export default function CustomerDetailsPage() {
             customerAddress: customer?.address || "",
             customerPhone: customer?.phone || "",
           });
-          // Redirect to the form route with the token
           router.push(`/form/${data.token}?${params.toString()}`);
         } else {
           alert(`Failed to generate kitchen form: ${data.error}`);
@@ -529,7 +628,6 @@ export default function CustomerDetailsPage() {
             customerAddress: customer?.address || "",
             customerPhone: customer?.phone || "",
           });
-          // Redirect to the form route with the token
           router.push(`/form/${data.token}?${params.toString()}`);
         } else {
           alert(`Failed to generate bedroom form: ${data.error}`);
@@ -546,12 +644,29 @@ export default function CustomerDetailsPage() {
     }
   };
 
-  const handleViewQuote = (quoteId: string) => {
-    router.push(`/dashboard/quotes/${quoteId}`);
-  };
-
   const handleViewJob = (jobId: string) => {
     router.push(`/dashboard/jobs/${jobId}`);
+  };
+
+  const handleViewFinancialDoc = (doc: FinancialDocument) => {
+    switch (doc.type) {
+      case "invoice":
+        router.push(`/dashboard/invoices/${doc.id}`);
+        break;
+      case "proforma":
+        router.push(`/dashboard/checklists/quotes/${doc.id}`);
+        break;
+      case "receipt":
+      case "deposit":
+      case "final":
+        router.push(`/dashboard/checklists/receipt?formSubmissionId=${doc.form_submission_id || doc.id}`);
+        break;
+      case "terms":
+        router.push(`/dashboard/payment-terms/${doc.id}`);
+        break;
+      default:
+        alert("Viewing not yet implemented for this document type");
+    }
   };
 
   const getContactMethodIcon = (method: string) => {
@@ -669,12 +784,12 @@ export default function CustomerDetailsPage() {
         return "Kitchen Checklist";
       case "document":
         const parts = formTypeRaw.split(/[-_]/);
-        const cleanedParts = parts.filter((word, index) => {
+        const cleanedParts = parts.filter((word: string, index: number) => {
           if (index === 0) return true;
           return word.toLowerCase() !== parts[index - 1].toLowerCase();
         });
         return cleanedParts
-          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
           .join(" ");
       default:
         return "Form Submission";
@@ -757,8 +872,6 @@ export default function CustomerDetailsPage() {
         paymentMethod: derivedData.payment_method || "BACS",
         paymentDescription: derivedData.payment_description || "Payment received for your Kitchen/Bedroom Cabinetry.",
       });
-      // Logic to view the receipt, possibly by navigating to a receipt form/viewer
-      // This will navigate to the form which will pre-populate the data
       router.push(`/dashboard/checklists/receipt?${params.toString()}`);
     };
 
@@ -793,10 +906,10 @@ export default function CustomerDetailsPage() {
               .filter(k => derivedData[k])
               .map(k => (
                 <Row 
-                    key={k} 
-                    label={k === 'document_type_display' ? 'Type' : humanizeLabel(k)} 
-                    value={derivedData[k]} 
-                    name={k} 
+                  key={k} 
+                  label={k === 'document_type_display' ? 'Type' : humanizeLabel(k)} 
+                  value={derivedData[k]} 
+                  name={k} 
                 />
               ))}
           </div>
@@ -921,34 +1034,88 @@ export default function CustomerDetailsPage() {
     );
   };
 
+  const renderFinancialDocument = (doc: FinancialDocument) => {
+    return (
+      <div key={doc.id} className="p-6 border rounded-lg bg-white shadow-sm hover:shadow-md transition-all duration-200">
+        <div className="flex items-start justify-between">
+          <div className="flex items-start space-x-4 flex-1">
+            <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl">
+              {FINANCIAL_DOCUMENT_ICONS[doc.type] || <FileText className="h-5 w-5 text-gray-600" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="font-semibold text-gray-900 truncate">{doc.title}</h3>
+              <p className="text-sm text-gray-500 mt-1">Created: {formatDate(doc.created_at)}</p>
+              <div className="mt-2 space-y-1">
+                {doc.total && (
+                  <p className="text-sm font-medium text-gray-900">
+                    Total: <span className="text-blue-600">£{doc.total.toFixed(2)}</span>
+                  </p>
+                )}
+                {doc.amount_paid && doc.amount_paid > 0 && (
+                  <p className="text-sm text-green-600">
+                    Paid: £{doc.amount_paid.toFixed(2)}
+                  </p>
+                )}
+                {doc.balance && doc.balance > 0 && (
+                  <p className="text-sm font-medium text-red-600">
+                    Balance: £{doc.balance.toFixed(2)}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+          <Button
+            onClick={() => handleViewFinancialDoc(doc)}
+            variant="outline"
+            className="ml-6 flex items-center space-x-2 px-4 py-2"
+          >
+            <Eye className="h-4 w-4" />
+            <span>View</span>
+          </Button>
+        </div>
+      </div>
+    );
+  };
+  
   const handleDeleteForm = async () => {
     if (!formToDelete || !canDelete()) return;
-
     setIsDeleting(true);
     try {
-      const response = await fetch(
+        // ✅ Get the auth token
+        const token = localStorage.getItem('auth_token');
+        if (!token) {
+        alert('You must be logged in to delete form submissions');
+        setIsDeleting(false);
+        return;
+        }
+
+        // ✅ Include Authorization header
+        const response = await fetch(
         `http://127.0.0.1:5000/form-submissions/${formToDelete.id}`,
         {
-          method: "DELETE",
+            method: "DELETE",
+            headers: {
+            'Authorization': `Bearer ${token}`,  // ✅ This was missing!
+            'Content-Type': 'application/json',
+            },
         }
-      );
+        );
 
-      if (response.ok) {
+        if (response.ok) {
         loadCustomerData();
         setShowDeleteDialog(false);
         setFormToDelete(null);
-      } else {
+        } else {
         const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
         alert(`Failed to delete form: ${errorData.error || "Unknown error"}`);
-      }
+        }
     } catch (error) {
-      console.error("Error deleting form:", error);
-      alert("Network error: Could not delete form");
+        console.error("Error deleting form:", error);
+        alert("Network error: Could not delete form");
     } finally {
-      setIsDeleting(false);
+        setIsDeleting(false);
     }
-  };
-
+    };
 
   if (loading) return <div className="p-8">Loading...</div>;
 
@@ -1005,8 +1172,7 @@ export default function CustomerDetailsPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                  {/* Creation actions visible ONLY if the user canEdit() */}
-                  {user?.role !== "Sales" && ( // Remedial checklist is production/post-sales
+                  {user?.role !== "Sales" && (
                     <DropdownMenuItem onClick={handleCreateRemedialChecklist} className="flex items-center space-x-2">
                       <CheckSquare className="h-4 w-4" />
                       <span>Remedial Action Checklist</span>
@@ -1065,7 +1231,6 @@ export default function CustomerDetailsPage() {
                 <span>Edit</span>
               </Button>
             )}
-            {/* Sales roles can view, but EDIT/CREATE is restricted by canEdit() */}
           </div>
         </div>
       </div>
@@ -1147,11 +1312,12 @@ export default function CustomerDetailsPage() {
                       {customer.project_types.map((type, index) => (
                         <span
                           key={index}
-                          className={`inline-flex px-2 py-1 text-sm font-semibold rounded-full ${
-                            type.trim() === "Kitchen" ? "bg-blue-100 text-blue-800" :
-                            type.trim() === "Bedroom" ? "bg-purple-100 text-purple-800" :
-                            "bg-gray-100 text-gray-800"
-                          }`}
+                          className={`
+                            inline-flex px-2 py-1 text-sm font-semibold rounded-full
+                            ${type.trim() === "Kitchen" ? "bg-blue-100 text-blue-800" :
+                              type.trim() === "Bedroom" ? "bg-purple-100 text-purple-800" :
+                              "bg-gray-100 text-gray-800"
+                            }`}
                         >
                           {type.trim()}
                         </span>
@@ -1190,52 +1356,55 @@ export default function CustomerDetailsPage() {
           )}
         </div>
 
+        {/* FORM SUBMISSIONS SECTION */}
         <div className="border-t border-gray-200 pt-8 mb-8">
           <h2 className="text-xl font-semibold text-gray-900 mb-6">Form Submissions</h2>
           {customer.form_submissions && customer.form_submissions.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {customer.form_submissions.map((submission) => (
                 <div key={submission.id}>{renderFormSubmission(submission)}</div>
               ))}
             </div>
           ) : (
-            <div className="text-gray-500 bg-gray-50 p-6 rounded-lg text-center">
-              <CheckSquare className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p className="mb-2">No form submissions found for this customer.</p>
+            <div className="text-gray-500 bg-gray-50 p-8 rounded-lg text-center">
+              <CheckSquare className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No Form Submissions</h3>
               <p className="text-sm">Generate a form link or create a checklist to collect customer information.</p>
             </div>
           )}
         </div>
 
+        {/* JOBS SECTION */}
         <div className="border-t border-gray-200 pt-8 mb-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Jobs</h2>
+          <h2 className="text-xl font-semibold text-gray-900 mb-6">Jobs</h2>
           {jobs.length > 0 ? (
-            <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {jobs.map((job) => (
-                <div key={job.id} className="p-4 border rounded-lg bg-gray-50">
+                <div key={job.id} className="p-6 border rounded-lg bg-white shadow-sm">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <div className="flex items-center space-x-3">
-                        <h3 className="font-medium">{job.job_reference || `Job #${job.id}`}</h3>
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          job.stage === "Complete" ? "bg-green-100 text-green-800" :
-                          job.stage === "Production" ? "bg-blue-100 text-blue-800" :
-                          job.stage === "Accepted" ? "bg-purple-100 text-purple-800" :
-                          "bg-gray-100 text-gray-800"
-                        }`}>
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3 mb-2">
+                        <h3 className="font-semibold text-gray-900">{job.job_reference || `Job #${job.id}`}</h3>
+                        <span className={`
+                          inline-flex px-3 py-1 text-sm font-medium rounded-full
+                          ${job.stage === "Complete" ? "bg-green-100 text-green-800" :
+                            job.stage === "Production" ? "bg-blue-100 text-blue-800" :
+                            job.stage === "Accepted" ? "bg-purple-100 text-purple-800" :
+                            "bg-gray-100 text-gray-800"
+                          }`}>
                           {job.stage}
                         </span>
                       </div>
-                      <p className="text-sm text-gray-500">Type: {job.type}</p>
+                      <p className="text-sm text-gray-500 mb-1">Type: {job.type}</p>
                       <p className="text-sm text-gray-500">Created: {formatDate(job.created_at)}</p>
                       {job.quote_price && (
-                        <p className="text-sm text-gray-500">Quote Price: £{job.quote_price.toFixed(2)}</p>
+                        <p className="text-sm text-gray-600 mt-1">Quote Price: £{job.quote_price.toFixed(2)}</p>
                       )}
                     </div>
                     <Button
                       onClick={() => handleViewJob(job.id)}
                       variant="outline"
-                      className="flex items-center space-x-2"
+                      className="ml-6 flex items-center space-x-2 px-4"
                     >
                       <Briefcase className="h-4 w-4" />
                       <span>View Job</span>
@@ -1245,44 +1414,51 @@ export default function CustomerDetailsPage() {
               ))}
             </div>
           ) : (
-            <div className="text-gray-500 bg-gray-50 p-6 rounded-lg text-center">
-              <Briefcase className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p>No jobs found for this customer.</p>
-              {user?.role === "Sales" && (
-                <p className="text-sm mt-2 text-gray-600">Jobs are created from accepted quotations.</p>
-              )}
+            <div className="text-gray-500 bg-gray-50 p-8 rounded-lg text-center">
+              <Briefcase className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No Jobs</h3>
+              <p className="mb-4">Jobs are created from accepted quotations.</p>
             </div>
           )}
         </div>
 
+        {/* FINANCIAL DOCUMENTS SECTION */}
         <div className="border-t border-gray-200 pt-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Quotations</h2>
-          {quotations.length > 0 ? (
-            <div className="space-y-4">
-              {quotations.map((quote) => (
-                <div key={quote.id} className="p-4 border rounded-lg bg-gray-50">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-medium">Quote #{quote.id}</h3>
-                      <p className="text-sm text-gray-500">Created: {formatDate(quote.created_at)}</p>
-                      <p className="text-sm text-gray-500">Total: £{Number(quote.total)?.toFixed(2) ?? "—"}</p>
-                    </div>
-                    <Button
-                      onClick={() => handleViewQuote(quote.id)}
-                      variant="outline"
-                      className="flex items-center space-x-2"
-                    >
-                      <FileText className="h-4 w-4" />
-                      <span>View Quote</span>
-                    </Button>
-                  </div>
-                </div>
-              ))}
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-gray-900">Financial Documents</h2>
+            <div className="text-sm text-gray-500 font-medium">
+              {financialDocs.length} document{financialDocs.length !== 1 ? 's' : ''}
+            </div>
+          </div>
+          {financialDocs.length > 0 ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {financialDocs.map((doc) => renderFinancialDocument(doc))}
             </div>
           ) : (
-            <div className="text-gray-500 bg-gray-50 p-6 rounded-lg text-center">
-              <FileText className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p>No quotations found for this customer.</p>
+            <div className="bg-gradient-to-r from-blue-50/60 to-indigo-50/60 p-12 rounded-xl text-center border-2 border-dashed border-blue-200">
+              <DollarSign className="h-16 w-16 text-blue-400 mx-auto mb-6" />
+              <h3 className="text-xl font-semibold text-gray-900 mb-4">No Financial Documents</h3>
+              <p className="text-gray-600 mb-8 max-w-2xl mx-auto">
+                Create invoices, receipts, quotes, or payment terms to track this customer's financial activity.
+              </p>
+              <div className="flex flex-wrap justify-center gap-4">
+                {canCreateFinancialDocs() && (
+                  <>
+                    <Button onClick={handleCreateInvoice} className="flex items-center space-x-2">
+                      <FileText className="h-4 w-4" />
+                      <span>Create Invoice</span>
+                    </Button>
+                    <Button variant="outline" onClick={handleCreateProformaInvoice} className="flex items-center space-x-2">
+                      <FileText className="h-4 w-4" />
+                      <span>Proforma Invoice</span>
+                    </Button>
+                    <Button variant="outline" onClick={handleCreateReceipt} className="flex items-center space-x-2">
+                      <Receipt className="h-4 w-4" />
+                      <span>Receipt</span>
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1293,7 +1469,7 @@ export default function CustomerDetailsPage() {
           <DialogHeader>
             <DialogTitle>{formType === "kitchen" ? "Kitchen" : "Bedroom"} Checklist Form Link Generated</DialogTitle>
             <DialogDescription>
-              Share this link with {customer.name} to fill out the {formType === "kitchen" ? "kitchen" : "bedroom"} checklist form.
+              Share this link with {customer?.name} to fill out the {formType === "kitchen" ? "kitchen" : "bedroom"} checklist form.
               The form data will be linked to their existing customer record.
             </DialogDescription>
           </DialogHeader>
@@ -1342,7 +1518,7 @@ export default function CustomerDetailsPage() {
       </Dialog>
 
       <Dialog open={showFormDialog} onOpenChange={setShowFormDialog}>
-        <DialogContent className="w-[75vw] h-[75vh] max-w-none rounded-lg p-0 overflow-hidden">
+        <DialogContent className="w-[85vw] h-[85vh] max-w-none rounded-lg p-0 overflow-hidden">
           <div className="flex items-start justify-between px-6 py-4 border-b bg-white">
             <div>
               <DialogTitle className="text-lg font-semibold">
@@ -1353,7 +1529,7 @@ export default function CustomerDetailsPage() {
               </DialogDescription>
             </div>
           </div>
-          <div className="p-6 overflow-auto h-[calc(75vh-72px)] bg-gray-50">
+          <div className="p-6 overflow-auto h-[calc(85vh-72px)] bg-gray-50">
             {selectedForm ? (
               (() => {
                 let rawData: Record<string, any> = {};
@@ -1372,9 +1548,10 @@ export default function CustomerDetailsPage() {
                 }
 
                 if (currentFormType === "document") {
-                    return renderReceiptData(rawData);
+                  return renderReceiptData(rawData);
                 }
 
+                // ... (keep existing form rendering logic for checklists)
                 const inferredType = (rawData.form_type || "")
                   .toString()
                   .toLowerCase()
@@ -1488,7 +1665,6 @@ export default function CustomerDetailsPage() {
                                     .join(', ');
                                   return <Row key={k} label={humanizeLabel(k)} value={appliancesList || '—'} name={k} />;
                                 }
-                                
                                 return <Row key={k} label={humanizeLabel(k)} value={rawData[k]} name={k} />;
                               }
                               

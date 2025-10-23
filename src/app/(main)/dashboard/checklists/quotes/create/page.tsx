@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle, AlertCircle } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface QuoteItem {
   id: string;
@@ -28,7 +29,8 @@ const SuccessModal = ({
   onDownloadPdf, 
   onGoBack,
   isDownloading,
-  approvalStatus
+  approvalStatus,
+  userRole
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -36,8 +38,11 @@ const SuccessModal = ({
   onGoBack: () => void;
   isDownloading: boolean;
   approvalStatus: string;
+  userRole?: string;
 }) => {
   if (!isOpen) return null;
+
+  const isPending = approvalStatus === 'pending' && userRole !== 'Manager';
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -48,7 +53,7 @@ const SuccessModal = ({
             Quote Saved Successfully!
           </h3>
           
-          {approvalStatus === 'pending' ? (
+          {isPending ? (
             <>
               <p className="text-gray-600 mb-4">
                 Your quote has been saved and sent to the manager for approval.
@@ -64,12 +69,12 @@ const SuccessModal = ({
             </>
           ) : (
             <p className="text-gray-600 mb-6">
-              Would you like to download the quote as a PDF?
+              {userRole === 'Manager' ? 'Quote has been automatically approved.' : 'Quote is ready.'} Would you like to download the quote as a PDF?
             </p>
           )}
           
           <div className="flex flex-col space-y-3">
-            {approvalStatus === 'approved' && (
+            {!isPending && (
               <Button 
                 onClick={onDownloadPdf}
                 disabled={isDownloading}
@@ -91,10 +96,10 @@ const SuccessModal = ({
             
             <Button 
               onClick={onGoBack}
-              variant={approvalStatus === 'approved' ? 'outline' : 'default'}
+              variant={!isPending ? 'outline' : 'default'}
               className="w-full"
             >
-              {approvalStatus === 'approved' ? 'Go Back' : 'Close'}
+              {!isPending ? 'Go Back' : 'Close'}
             </Button>
           </div>
         </div>
@@ -106,6 +111,9 @@ const SuccessModal = ({
 export default function CreateQuotePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { user } = useAuth();
+  
+  const [customerId, setCustomerId] = useState<string | null>(null);
   
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -129,6 +137,7 @@ export default function CreateQuotePage() {
   ]);
 
   const [loading, setLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [savedQuoteId, setSavedQuoteId] = useState<string | null>(null);
@@ -140,13 +149,19 @@ export default function CreateQuotePage() {
   const [statusMessage, setStatusMessage] = useState<string>('');
 
   useEffect(() => {
-    const customerId = searchParams.get('customerId');
+    const customerIdParam = searchParams.get('customerId');
     const customerName = searchParams.get('customerName');
     const customerAddress = searchParams.get('customerAddress');
     const customerPhone = searchParams.get('customerPhone');
     const customerEmail = searchParams.get('customerEmail');
 
-    if (customerId && customerName) {
+    if (customerIdParam) {
+      setCustomerId(customerIdParam);
+      console.log('Customer ID loaded:', customerIdParam);
+      console.log('Current user role:', user?.role);
+    }
+
+    if (customerName) {
       setFormData({
         date: new Date().toISOString().split('T')[0],
         name: customerName || '',
@@ -156,7 +171,7 @@ export default function CreateQuotePage() {
         notes: ''
       });
     }
-  }, [searchParams]);
+  }, [searchParams, user]);
 
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0);
   const vatAmount = subtotal * VAT_RATE;
@@ -176,7 +191,7 @@ export default function CreateQuotePage() {
         const updatedItem = { ...item, [field]: value };
         
         if (field === 'quantity' || field === 'unitPrice') {
-          updatedItem.amount = updatedItem.quantity * updatedItem.unitPrice;
+          updatedItem.amount = (updatedItem.quantity as number) * (updatedItem.unitPrice as number);
         }
         
         return updatedItem;
@@ -202,131 +217,224 @@ export default function CreateQuotePage() {
     setItems(prev => prev.filter(item => item.id !== id));
   };
 
+  // Fixed handleSubmit function with proper error handling
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setStatusMessage('');
+
+    if (!formData.name?.trim()) {
+      alert("Customer name is required");
+      return;
+    }
+    
+    if (!formData.address?.trim()) {
+      alert("Customer address is required");
+      return;
+    }
+    
+    if (total <= 0) {
+      alert("Please add at least one item with a valid price");
+      return;
+    }
+
+    setIsSubmitting(true);
 
     try {
-      const customerId = searchParams.get('customerId');
+      const token = localStorage.getItem('auth_token');
+      const headers: HeadersInit = {
+        "Content-Type": "application/json",
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const formDataToSend = {
+        ...formData,
+        total: total,
+        subtotal: subtotal,
+        vat: vatAmount,
+        items: items
+          .filter(item => item.item.trim() && item.amount > 0)
+          .map(item => ({
+            item: item.item,
+            description: item.description,
+            colour: item.colour,
+            quantity: item.quantity,
+            unit_price: item.unitPrice,
+            amount: item.amount
+          })),
+        customer_id: customerId
+      };
+
+      const response = await fetch("http://127.0.0.1:5000/quotations", {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify(formDataToSend),
+      });
+
+      // Improved error handling - no undefined variables
+      if (!response.ok) {
+        let errorMessage = 'Failed to save quote';
+        
+        try {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorData.message || errorMessage;
+          } else {
+            const errorText = await response.text();
+            errorMessage = errorText || errorMessage;
+          }
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      // Parse successful JSON response
+      let responseData;
+      try {
+        responseData = await response.json();
+      } catch (parseError) {
+        throw new Error('Invalid response format from server');
+      }
+
+      alert(`Quote #${responseData.id} created successfully!`);
+      router.push(`/dashboard/customers/${customerId}`);
+      
+    } catch (error) {
+      console.error("Error saving quote:", error);
+      const errorMsg = error instanceof Error ? error.message : "Failed to save quote";
+      alert(errorMsg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleGenerateQuote = async () => {
+    try {
       if (!customerId) {
-        throw new Error("Customer ID is required to save the quotation");
+        setStatusMessage('❌ Error: Customer ID is missing. Please select a customer first.');
+        return;
+      }
+
+      if (!formData.name || !formData.address) {
+        setStatusMessage('❌ Error: Customer name and address are required.');
+        return;
+      }
+
+      if (items.length === 0 || items.every(item => !item.item)) {
+        setStatusMessage('❌ Error: Please add at least one item to the quote.');
+        return;
+      }
+
+      setLoading(true);
+      setStatusMessage('⏳ Generating quote...');
+      
+      const token = localStorage.getItem('auth_token');
+      const headers: HeadersInit = {
+        "Content-Type": "application/json",
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
       }
 
       const quoteData = {
         customer_id: customerId,
-        total: Number(total),
-        notes: formData.notes,
-        items: items.map(item => ({
-          item: item.item,
-          description: item.description,
-          color: item.colour,
-          amount: Number(item.amount)
-        }))
+        customer_name: formData.name,
+        customer_address: formData.address,
+        customer_phone: formData.phone,
+        customer_email: formData.email,
+        date: formData.date,
+        items: items
+          .filter(item => item.item.trim())
+          .map(item => ({
+            item: item.item,
+            description: item.description,
+            colour: item.colour,
+            quantity: item.quantity,
+            unit_price: item.unitPrice,
+            amount: item.amount
+          })),
+        subtotal: subtotal,
+        vat: vatAmount,
+        total: total,
+        notes: formData.notes
       };
 
-      const response = await fetch('http://127.0.0.1:5000/quotations', {
+      console.log('Sending quote data:', quoteData);
+
+      const response = await fetch('http://127.0.0.1:5000/quotations/generate-quote', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(quoteData),
+        headers: headers,
+        body: JSON.stringify(quoteData)
       });
 
       if (!response.ok) {
-        throw new Error('Failed to save quotation');
+        let errorMessage = 'Failed to generate quote';
+        try {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorData.message || errorMessage;
+          } else {
+            const errorText = await response.text();
+            errorMessage = errorText || errorMessage;
+          }
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        throw new Error(errorMessage);
       }
 
-      const result = await response.json();
-      setSavedQuoteId(result.id);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Quote_${formData.name.replace(/\s+/g, '_')}_${formData.date}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      setStatusMessage('✅ Quote generated and downloaded successfully!');
       
-      // Store submission ID and approval status if returned
-      if (result.form_submission_id) {
-        setSubmissionId(result.form_submission_id);
-      }
-      setApprovalStatus(result.approval_status || 'approved'); // Quotes might be auto-approved
-      
-      setShowSuccessModal(true);
+      setTimeout(() => {
+        setStatusMessage('');
+      }, 5000);
+
     } catch (error) {
-      console.error('Error creating quote:', error);
-      setStatusMessage('❌ Failed to save quote. Please try again.');
-      setTimeout(() => setStatusMessage(''), 5000);
+      console.error('Error generating quote:', error);
+      const errorMsg = error instanceof Error ? error.message : 'Failed to generate quote';
+      setStatusMessage(`❌ Error: ${errorMsg}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Check approval status before download
-  const checkApprovalStatus = async () => {
-    if (!submissionId) {
-      // If no submission ID, quote might not require approval
-      return true;
-    }
-
-    try {
-      const response = await fetch(`http://127.0.0.1:5000/approvals/status/${submissionId}`);
-      const data = await response.json();
-      
-      setApprovalStatus(data.approval_status);
-      setRejectionReason(data.rejection_reason || '');
-
-      if (data.approval_status === 'rejected') {
-        setStatusMessage(`❌ This quote was rejected. Reason: ${data.rejection_reason}`);
-        return false;
-      } else if (data.approval_status === 'pending') {
-        setStatusMessage('⚠️ This quote is pending manager approval. You cannot download it yet.');
-        return false;
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Error checking approval status:', error);
-      // If check fails, allow download (might not require approval)
-      return true;
-    }
-  };
-
   const handleDownloadPdf = async () => {
-    // Check approval status first if there's a submission ID
-    if (submissionId) {
-      const canDownload = await checkApprovalStatus();
-      if (!canDownload) {
-        setTimeout(() => setStatusMessage(''), 5000);
-        return;
-      }
+    if (!savedQuoteId) {
+      alert("No quote ID available");
+      return;
     }
 
     setIsDownloading(true);
-    
-    try {
-      const pdfData = {
-        date: formData.date,
-        name: formData.name,
-        address: formData.address,
-        phone: formData.phone,
-        email: formData.email,
-        notes: formData.notes,
-        items: items.map(item => ({
-          item: item.item,
-          description: item.description,
-          colour: item.colour,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          amount: item.amount
-        })),
-        subtotal,
-        vatAmount,
-        total,
-        quoteNumber: savedQuoteId ? `Q${savedQuoteId}` : `Q${Date.now()}`,
-        submission_id: submissionId
-      };
 
-      const response = await fetch('/api/generate-pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(pdfData),
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: HeadersInit = {};
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`http://127.0.0.1:5000/quotations/${savedQuoteId}/pdf`, {
+        method: 'GET',
+        headers: headers
       });
 
       if (!response.ok) {
@@ -337,32 +445,18 @@ export default function CreateQuotePage() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `quote-${pdfData.quoteNumber}.pdf`;
+      a.download = `Quote_${savedQuoteId}.pdf`;
       document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
 
-      setTimeout(() => {
-        setShowSuccessModal(false);
-        router.back();
-      }, 1000);
-      
     } catch (error) {
-      console.error('Error generating PDF:', error);
-      alert('Failed to generate PDF. Please try again.');
+      console.error('Error downloading PDF:', error);
+      alert('Failed to download PDF');
     } finally {
       setIsDownloading(false);
     }
-  };
-
-  const handleGoBack = () => {
-    setShowSuccessModal(false);
-    router.back();
-  };
-
-  const handleGenerateQuote = () => {
-    handleDownloadPdf();
   };
 
   return (
@@ -371,272 +465,257 @@ export default function CreateQuotePage() {
         isOpen={showSuccessModal}
         onClose={() => setShowSuccessModal(false)}
         onDownloadPdf={handleDownloadPdf}
-        onGoBack={handleGoBack}
+        onGoBack={() => {
+          setShowSuccessModal(false);
+          if (customerId) {
+            router.push(`/dashboard/customers/${customerId}`);
+          } else {
+            router.push('/dashboard/checklists/quotes');
+          }
+        }}
         isDownloading={isDownloading}
         approvalStatus={approvalStatus}
+        userRole={user?.role}
       />
 
-      <div className="border-b border-gray-200 bg-white px-8 py-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div
-              onClick={() => router.back()}
-              className="flex items-center text-gray-500 hover:text-gray-700 cursor-pointer"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </div>
-            <h1 className="text-3xl font-semibold text-gray-900">Create Quote</h1>
-          </div>
-        </div>
-      </div>
-
-      {/* Approval Status Badge */}
-      {submissionId && (
-        <div className="px-8 pt-6">
-          <div className={`p-3 rounded-lg border-l-4 ${
-            approvalStatus === 'approved' ? 'bg-green-50 border-green-500' :
-            approvalStatus === 'rejected' ? 'bg-red-50 border-red-500' :
-            'bg-yellow-50 border-yellow-500'
-          }`}>
-            <div className="flex items-center">
-              <AlertCircle className={`h-5 w-5 mr-2 ${
-                approvalStatus === 'approved' ? 'text-green-600' :
-                approvalStatus === 'rejected' ? 'text-red-600' :
-                'text-yellow-600'
-              }`} />
-              <span className="font-medium">
-                Status: <span className="capitalize">{approvalStatus}</span>
-              </span>
-            </div>
-            {approvalStatus === 'rejected' && rejectionReason && (
-              <p className="text-sm text-red-700 mt-1 ml-7">Reason: {rejectionReason}</p>
-            )}
-            {approvalStatus === 'pending' && (
-              <p className="text-sm text-yellow-700 mt-1 ml-7">Waiting for manager approval before PDF download is available.</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Status Message */}
-      {statusMessage && (
-        <div className="px-8 pt-4">
-          <div className={`p-3 rounded-md text-sm font-medium ${
-            statusMessage.startsWith("✅") ? "bg-green-100 text-green-800" :
-            statusMessage.startsWith("❌") ? "bg-red-100 text-red-800" :
-            statusMessage.startsWith("⚠️") ? "bg-yellow-100 text-yellow-800" :
-            "bg-gray-200 text-gray-800"
-          }`}>
-            {statusMessage}
-          </div>
-        </div>
-      )}
-
-      <div className="px-8 py-6 max-w-6xl">
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>Customer Information</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <Label htmlFor="date">Date</Label>
-                <Input
-                  id="date"
-                  name="date"
-                  type="date"
-                  value={formData.date}
-                  onChange={handleInputChange}
-                  required
-                />
-              </div>
-              <div>
-                <Label htmlFor="name">Name</Label>
-                <Input
-                  id="name"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  required
-                />
-              </div>
-              <div className="md:col-span-2">
-                <Label htmlFor="address">Address</Label>
-                <Textarea
-                  id="address"
-                  name="address"
-                  value={formData.address}
-                  onChange={handleInputChange}
-                  rows={3}
-                />
-              </div>
-              <div>
-                <Label htmlFor="phone">Phone</Label>
-                <Input
-                  id="phone"
-                  name="phone"
-                  type="tel"
-                  value={formData.phone}
-                  onChange={handleInputChange}
-                />
-              </div>
-              <div>
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  name="email"
-                  type="email"
-                  value={formData.email}
-                  onChange={handleInputChange}
-                />
-              </div>
-              <div className="md:col-span-2">
-                <Label htmlFor="notes">Notes</Label>
-                <Textarea
-                  id="notes"
-                  name="notes"
-                  value={formData.notes}
-                  onChange={handleInputChange}
-                  rows={3}
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-6">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Quote Items</CardTitle>
-              <Button type="button" onClick={addItem} variant="outline" size="sm">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Item
+      <form onSubmit={handleSubmit}>
+        <div className="bg-white border-b sticky top-0 z-10">
+          <div className="px-8 py-4 flex items-center justify-between max-w-6xl">
+            <div className="flex items-center space-x-4">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => router.back()}
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back
               </Button>
+              <h1 className="text-2xl font-semibold text-gray-900">Create Quote</h1>
             </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {items.map((item, index) => (
-                <div key={item.id} className="p-4 border rounded-lg bg-gray-50">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="font-medium">Item {index + 1}</h4>
-                    {items.length > 1 && (
-                      <Button
-                        type="button"
-                        onClick={() => removeItem(item.id)}
-                        variant="ghost"
-                        size="sm"
-                        className="text-red-600 hover:text-red-700"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
-                    <div className="lg:col-span-2">
-                      <Label>Item</Label>
-                      <Input
-                        value={item.item}
-                        onChange={(e) => handleItemChange(item.id, 'item', e.target.value)}
-                        placeholder="Item name"
-                      />
-                    </div>
-                    <div className="lg:col-span-2">
-                      <Label>Description</Label>
-                      <Input
-                        value={item.description}
-                        onChange={(e) => handleItemChange(item.id, 'description', e.target.value)}
-                        placeholder="Description"
-                      />
-                    </div>
-                    <div>
-                      <Label>Colour</Label>
-                      <Input
-                        value={item.colour}
-                        onChange={(e) => handleItemChange(item.id, 'colour', e.target.value)}
-                        placeholder="Colour"
-                      />
-                    </div>
-                    <div>
-                      <Label>Quantity</Label>
-                      <Input
-                        type="number"
-                        min="1"
-                        value={item.quantity}
-                        onChange={(e) => handleItemChange(item.id, 'quantity', parseInt(e.target.value) || 1)}
-                      />
-                    </div>
-                    <div>
-                      <Label>Unit Price (£)</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={item.unitPrice}
-                        onChange={(e) => handleItemChange(item.id, 'unitPrice', parseFloat(e.target.value) || 0)}
-                      />
-                    </div>
-                    <div>
-                      <Label>Amount (£)</Label>
-                      <Input
-                        value={item.amount.toFixed(2)}
-                        readOnly
-                        className="bg-gray-100"
-                      />
-                    </div>
-                  </div>
+          </div>
+        </div>
+
+        {/* Status Message */}
+        {statusMessage && (
+          <div className="px-8 pt-4">
+            <div className={`p-3 rounded-md text-sm font-medium ${
+              statusMessage.startsWith("✅") ? "bg-green-100 text-green-800" :
+              statusMessage.startsWith("❌") ? "bg-red-100 text-red-800" :
+              statusMessage.startsWith("⚠️") ? "bg-yellow-100 text-yellow-800" :
+              "bg-gray-200 text-gray-800"
+            }`}>
+              {statusMessage}
+            </div>
+          </div>
+        )}
+
+        <div className="px-8 py-6 max-w-6xl">
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Customer Information</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <Label htmlFor="date">Date</Label>
+                  <Input
+                    id="date"
+                    name="date"
+                    type="date"
+                    value={formData.date}
+                    onChange={handleInputChange}
+                    required
+                  />
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+                <div>
+                  <Label htmlFor="name">Name</Label>
+                  <Input
+                    id="name"
+                    name="name"
+                    value={formData.name}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <Label htmlFor="address">Address</Label>
+                  <Textarea
+                    id="address"
+                    name="address"
+                    value={formData.address}
+                    onChange={handleInputChange}
+                    rows={3}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="phone">Phone</Label>
+                  <Input
+                    id="phone"
+                    name="phone"
+                    type="tel"
+                    value={formData.phone}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    name="email"
+                    type="email"
+                    value={formData.email}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Textarea
+                    id="notes"
+                    name="notes"
+                    value={formData.notes}
+                    onChange={handleInputChange}
+                    rows={3}
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>Quote Summary</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 max-w-md ml-auto">
-              <div className="flex justify-between">
-                <span>Subtotal:</span>
-                <span>£{subtotal.toFixed(2)}</span>
+          <Card className="mb-6">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>Quote Items</CardTitle>
+                <Button type="button" onClick={addItem} variant="outline" size="sm">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Item
+                </Button>
               </div>
-              <div className="flex justify-between">
-                <span>VAT (20%):</span>
-                <span>£{vatAmount.toFixed(2)}</span>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {items.map((item, index) => (
+                  <div key={item.id} className="p-4 border rounded-lg bg-gray-50">
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="font-medium">Item {index + 1}</h4>
+                      {items.length > 1 && (
+                        <Button
+                          type="button"
+                          onClick={() => removeItem(item.id)}
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-600 hover:text-red-700"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+                      <div className="lg:col-span-2">
+                        <Label>Item</Label>
+                        <Input
+                          value={item.item}
+                          onChange={(e) => handleItemChange(item.id, 'item', e.target.value)}
+                          placeholder="Item name"
+                        />
+                      </div>
+                      <div className="lg:col-span-2">
+                        <Label>Description</Label>
+                        <Input
+                          value={item.description}
+                          onChange={(e) => handleItemChange(item.id, 'description', e.target.value)}
+                          placeholder="Description"
+                        />
+                      </div>
+                      <div>
+                        <Label>Colour</Label>
+                        <Input
+                          value={item.colour}
+                          onChange={(e) => handleItemChange(item.id, 'colour', e.target.value)}
+                          placeholder="Colour"
+                        />
+                      </div>
+                      <div>
+                        <Label>Quantity</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={item.quantity}
+                          onChange={(e) => handleItemChange(item.id, 'quantity', parseInt(e.target.value) || 1)}
+                        />
+                      </div>
+                      <div>
+                        <Label>Unit Price (£)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.unitPrice}
+                          onChange={(e) => handleItemChange(item.id, 'unitPrice', parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+                      <div>
+                        <Label>Amount (£)</Label>
+                        <Input
+                          value={item.amount.toFixed(2)}
+                          readOnly
+                          className="bg-gray-100"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="flex justify-between font-bold text-lg border-t pt-2">
-                <span>Total:</span>
-                <span>£{total.toFixed(2)}</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <div className="flex items-center justify-between">
-          <Button type="button" variant="outline" onClick={() => router.back()}>
-            Cancel
-          </Button>
-          
-          <div className="flex items-center space-x-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleGenerateQuote}
-              className="flex items-center space-x-2"
-              disabled={!formData.name || items.some(item => !item.item)}
-            >
-              <FileText className="h-4 w-4" />
-              <span>Generate Quote</span>
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Quote Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2 max-w-md ml-auto">
+                <div className="flex justify-between">
+                  <span>Subtotal:</span>
+                  <span>£{subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>VAT (20%):</span>
+                  <span>£{vatAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between font-bold text-lg border-t pt-2">
+                  <span>Total:</span>
+                  <span>£{total.toFixed(2)}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex items-center justify-between">
+            <Button type="button" variant="outline" onClick={() => router.back()}>
+              Cancel
             </Button>
             
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Saving...' : 'Save Quote'}
-            </Button>
+            <div className="flex items-center space-x-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleGenerateQuote}
+                className="flex items-center space-x-2"
+                disabled={!formData.name || items.some(item => !item.item) || !customerId}
+              >
+                <FileText className="h-4 w-4" />
+                <span>Generate Quote</span>
+              </Button>
+              
+              <Button type="submit" disabled={isSubmitting || !customerId || total <= 0}>
+                {isSubmitting ? 'Saving...' : 'Save Quote'}
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

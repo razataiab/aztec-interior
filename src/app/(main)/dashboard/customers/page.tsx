@@ -117,7 +117,7 @@ export default function CustomersPage() {
       console.log("All customers:", allCustomers);
       
       const filteredData = allCustomers.filter((customer: Customer) => {
-        const matchesCreatedBy = customer.created_by === user.id;
+        const matchesCreatedBy = customer.created_by === String(user.id);
         const matchesSalesperson = customer.salesperson === user.name;
         
         console.log(`Customer ${customer.name}:`, {
@@ -185,7 +185,7 @@ export default function CustomersPage() {
   const canEditCustomer = (customer: Customer): boolean => {
     if (user?.role === "Manager" || user?.role === "HR") return true;
     if (user?.role === "Sales") {
-      return customer.created_by === user.id || customer.salesperson === user.name;
+      return customer.created_by === String(user.id) || customer.salesperson === user.name;
     }
     return false;
   };
@@ -274,12 +274,13 @@ export default function CustomersPage() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        {user?.role !== "Staff" && (
-          <Button onClick={() => setShowCreateModal(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Customer
-          </Button>
-        )}
+        {user?.role !== "Staff" && user?.role !== "Production" && (
+  <Button onClick={() => setShowCreateModal(true)}>
+    <Plus className="mr-2 h-4 w-4" />
+    Add Customer
+  </Button>
+)}
+
       </div>
 
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
