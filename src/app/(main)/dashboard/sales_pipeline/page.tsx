@@ -69,11 +69,11 @@ const STAGES = [
 type Stage = (typeof STAGES)[number];
 
 const stageColors: Record<Stage, string> = {
-    Lead: "#6B7280",         
-    Survey: "#EC4899",       
-    Design: "#10B981",       
-    Quote: "#3B82F6",        
-    Consultation: "#8B5CF6", 
+    Lead: "#6B7280",            
+    Survey: "#EC4899",         
+    Design: "#10B981",         
+    Quote: "#3B82F6",          
+    Consultation: "#8B5CF6",   
     Quoted: "#06B6D4",
     Accepted: "#059669",
     OnHold: "#6D28D9",
@@ -108,12 +108,12 @@ const ROLE_PERMISSIONS: Record<UserRole, any> = {
         canSchedule: true,
     },
     Sales: {
-        canCreate: true, 
-        canEdit: true, 
+        canCreate: true,  
+        canEdit: true,  
         canDelete: false,
-        canViewFinancials: true, 
-        canDragDrop: true, 
-        canViewAllRecords: false, 
+        canViewFinancials: true,  
+        canDragDrop: true,  
+        canViewAllRecords: false,  
         canSendQuotes: true,
         canSchedule: false,
     },
@@ -121,9 +121,9 @@ const ROLE_PERMISSIONS: Record<UserRole, any> = {
         canCreate: false,
         canEdit: true,
         canDelete: false,
-        canViewFinancials: false, 
-        canDragDrop: true, 
-        canViewAllRecords: true, 
+        canViewFinancials: false,  
+        canDragDrop: true,  
+        canViewAllRecords: true,  
         canSendQuotes: false,
         canSchedule: false,
     },
@@ -161,17 +161,18 @@ type Customer = {
     salesperson?: string | null;
     status: string;
     created_at?: string | null;
-    created_by?: string | null; 
+    created_by?: string | null;  
     updated_at?: string | null;
     updated_by?: string | null;
 };
 
+// Merged Job/Project Type for clarity in pipeline data
 type Job = {
     id: string;
     customer_id: string;
     job_reference?: string | null;
-    job_name?: string | null;
-    job_type: "Kitchen" | "Bedroom" | "Wardrobe" | "Remedial" | "Other";
+    job_name?: string | null; // This will hold the project_name for Project items
+    job_type: "Kitchen" | "Bedroom" | "Wardrobe" | "Remedial" | "Other"; // Project type maps here
     stage: Stage;
     quote_price?: number | null;
     agreed_price?: number | null;
@@ -186,17 +187,19 @@ type Job = {
     salesperson_name?: string | null;
     created_at?: string | null;
     updated_at?: string | null;
+    deposit1_paid?: boolean; // Added for the pipeline item
+    deposit2_paid?: boolean; // Added for the pipeline item
 };
 
 // Combined type for pipeline display
 type PipelineItem = {
-    id: string;
-    type: 'customer' | 'job';
+    id: string; // Can be customer-uuid, job-uuid, or project-uuid
+    type: 'customer' | 'job' | 'project'; // 'job' covers both real Job models and Project models for display purposes
     customer: Customer;
-    job?: Job;
+    job?: Job; // Job model or Project model fields mapped here
     // Display fields
     reference: string;
-    name: string;
+    name: string; // Customer name OR Customer Name - Project Name
     stage: Stage;
     jobType?: string;
     quotePrice?: number | null;
@@ -241,7 +244,7 @@ const makeColumns = () =>
 
 const columnIdToStage = (colId: string): Stage => {
     const stage = STAGES.find((s) => `col-${s.toLowerCase().replace(/\s+/g, "-")}` === colId);
-    return stage ?? "Lead"; 
+    return stage ?? "Lead";  
 };
 
 const stageToColumnId = (stage: Stage) => `col-${stage.toLowerCase().replace(/\s+/g, "-")}`;
@@ -267,7 +270,7 @@ export default function EnhancedPipelinePage() {
         itemId: string | null;
         newStage?: Stage;
         reason?: string;
-        itemType?: 'customer' | 'job';
+        itemType?: 'customer' | 'job' | 'project';
     }>({
         open: false,
         itemId: null,
@@ -343,18 +346,26 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         return items.map((item) => {
             // DESTRUCTURE the customer/job objects to explicitly REMOVE the 'notes' field
             const { notes: customerNotes, ...customerWithoutNotes } = item.customer;
+            // The item.job could be a Job model or a Project model (from the backend fix)
             const jobWithoutNotes = item.job ? (({ notes: jobNotes, ...rest }) => rest)(item.job) : undefined;
+            
+            // CRITICAL FIX: The name and reference MUST use the item-specific data
+            const isProjectItem = item.id.startsWith('project-');
+            const jobName = isProjectItem ? `${item.customer.name} - ${item.job?.job_name || 'Project'}` : item.customer.name;
+            const jobReference = isProjectItem 
+                ? item.job?.job_reference || `PROJ-${item.job?.id.slice(-4).toUpperCase()}`
+                : item.job?.job_reference || `JOB-${item.job?.id.slice(-4).toUpperCase()}`;
 
             return {
                 id: item.id,
-                name: `${item.reference} — ${item.name}`,
+                name: `${jobReference} — ${jobName}`, // Use the corrected, unique name
                 column: stageToColumnId(item.stage),
                 itemId: item.id,
-                itemType: item.type,
+                itemType: isProjectItem ? 'project' : item.type, // Explicitly set 'project' type
                 // PASS the new objects that DO NOT have the notes field
                 customer: customerWithoutNotes,
                 job: jobWithoutNotes,
-                reference: item.reference,
+                reference: jobReference,
                 stage: item.stage,
                 jobType: item.jobType,
                 quotePrice: item.quotePrice,
@@ -373,6 +384,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
 
 
     // Fallback method to create pipeline items when using separate endpoints
+    // NOTE: This logic is now likely obsolete since the combined /pipeline endpoint is fixed.
     const createPipelineItemsFromSeparateData = (customers: any[], jobs: any[]): PipelineItem[] => {
         const items: PipelineItem[] = [];
         const jobsByCustomerId = new Map<string, any[]>();
@@ -396,7 +408,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                     customer: customer,
                     reference: `CUST-${customer.id.slice(-4).toUpperCase()}`,
                     name: customer.name,
-                    stage: customerStage, 
+                    stage: customerStage,  
                     jobType: customer.project_types?.join(', '),
                     measureDate: customer.date_of_measure,
                     salesperson: customer.salesperson,
@@ -412,15 +424,15 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                         job: job,
                         reference: job.job_reference || `JOB-${job.id.slice(-4).toUpperCase()}`,
                         name: customer.name,
-                        stage: jobStage, 
+                        stage: jobStage,  
                         jobType: job.job_type,
                         quotePrice: job.quote_price,
                         agreedPrice: job.agreed_price,
                         soldAmount: job.sold_amount,
                         deposit1: job.deposit1,
                         deposit2: job.deposit2,
-                        deposit1Paid: false, 
-                        deposit2Paid: false, 
+                        deposit1Paid: false,  
+                        deposit2Paid: false,  
                         measureDate: job.measure_date || customer.date_of_measure,
                         deliveryDate: job.delivery_date,
                         salesperson: job.salesperson_name || customer.salesperson,
@@ -439,7 +451,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
             console.log("⏳ Auth still loading, skipping fetch...");
             return;
           }
-      
+        
           // ✅ Ensure both user and token exist
           if (!user || !token) {
             console.warn("⚠️ No user or token available, skipping fetch.");
@@ -452,11 +464,9 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                 setLoading(true);
                 setError(null);
 
-                let customersData: Customer[] = [];
-                let jobsData: Job[] = [];
                 let pipelineItemsRetrieved: any[] = [];
 
-                // 1. Try fetching from the combined pipeline endpoint
+                // 1. Try fetching from the combined pipeline endpoint (now updated in backend)
                 try {
                     const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline', {
                         headers: getAuthHeaders() // ADD THIS
@@ -465,6 +475,9 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                         const rawPipelineData = await pipelineResponse.json();
                         
                         pipelineItemsRetrieved = rawPipelineData.map((item: any) => {
+                            const isProjectItem = item.id.startsWith('project-');
+
+                            // CRITICAL FIX: Prioritize the item's job/project stage over the customer's stage
                             const primaryStage = item.type === 'customer' 
                                 ? item.customer.stage 
                                 : (item.job?.stage || item.customer.stage);
@@ -491,12 +504,22 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                 const jobStage = item.job?.stage ? 
                                     (STAGES.includes(item.job.stage) ? item.job.stage : 'Lead') : 
                                     validStage;
+                                
+                                // CRITICAL FIX: Correctly extract name and reference for Project vs Job
+                                const jobReference = isProjectItem 
+                                    ? item.job.job_reference || `PROJ-${item.job.id.slice(-4).toUpperCase()}`
+                                    : item.job.job_reference || `JOB-${item.job.id.slice(-4).toUpperCase()}`;
+
+                                // CRITICAL FIX: Generate unique name for Project items
+                                const jobName = isProjectItem ? `${item.customer.name} - ${item.job.job_name}` : item.customer.name;
+
 
                                 return {
                                     ...commonItem,
-                                    type: 'job' as const,
+                                    type: isProjectItem ? 'project' as const : 'job' as const, // Use 'project' type
                                     job: item.job,
-                                    reference: item.job?.job_reference || `JOB-${item.job.id.slice(-4).toUpperCase()}`,
+                                    name: jobName,
+                                    reference: jobReference,
                                     stage: jobStage as Stage,
                                     jobType: item.job?.job_type,
                                     quotePrice: item.job?.quote_price,
@@ -523,18 +546,19 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                     console.warn('Pipeline endpoint not available or failed, falling back to individual endpoints...');
                 }
 
-                // 2. Fallback to individual endpoints (logic remains the same)
+                // 2. Fallback (Existing old logic, kept for robustness)
                 const customersResponse = await fetch('http://127.0.0.1:5000/customers', {
-                    headers: getAuthHeaders() // ADD THIS
+                    headers: getAuthHeaders() 
                 });
                 if (!customersResponse.ok) {
                     throw new Error(`Failed to fetch customers: ${customersResponse.statusText}`);
                 }
-                customersData = await customersResponse.json();
+                const customersData = await customersResponse.json();
 
+                let jobsData: Job[] = [];
                 try {
                     const jobsResponse = await fetch('http://127.0.0.1:5000/jobs', {
-                        headers: getAuthHeaders() // ADD THIS
+                        headers: getAuthHeaders()
                     });
                     if (jobsResponse.ok) {
                         jobsData = await jobsResponse.json();
@@ -563,6 +587,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         fetchData();
     }, [authLoading, token, user]);
 
+    // --- FIX: Updated handleDataChange to support Project updates ---
     const handleDataChange = async (next: any[]) => {
         if (!permissions.canDragDrop) {
             alert("You don't have permission to move items in the pipeline.");
@@ -576,19 +601,19 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         });
 
         // --- ADD LOGGING HERE ---
-     if (moved.length > 0) {
-        console.log("handleDataChange triggered. Moved items:", moved.map(item => ({
-            id: item.itemId,
-            targetColumn: item.column,
-            targetStage: columnIdToStage(item.column)
-        })));
-     }
+        if (moved.length > 0) {
+            console.log("handleDataChange triggered. Moved items:", moved.map(item => ({
+                id: item.itemId,
+                targetColumn: item.column,
+                targetStage: columnIdToStage(item.column)
+            })));
+        }
 
         if (moved.length > 0) {
             const unauthorizedMoves = moved.filter(item => {
                 // Find the original pipeline item to get complete data
                 const originalItem = pipelineItems.find(pi => pi.id === item.itemId);
-                if (!originalItem) return true; // If we can't find it, consider it unauthorized
+                if (!originalItem) return true; 
                 
                 return !canUserEditItem(originalItem);
             });
@@ -605,23 +630,63 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
             try {
                 const updatePromises = moved.map(async (item) => {
                     const newStage = columnIdToStage(item.column);
-                    const entityId = item.itemId.replace('customer-', '').replace('job-', '');
+                    
+                    // 💡 FIX 1: Determine endpoint and entity ID based on item type prefix
+                    const isProject = item.itemId.startsWith('project-');
+                    const isCustomer = item.itemId.startsWith('customer-');
+                    const isJob = item.itemId.startsWith('job-');
+                    
+                    let entityId;
+                    let endpoint;
+                    let method;
 
-                    const isCustomer = item.itemType === 'customer';
-                    const endpoint = isCustomer
-                        ? `http://127.0.0.1:5000/customers/${entityId}/stage`
-                        : `http://127.0.0.1:5000/jobs/${entityId}/stage`;
+                    if (isJob) {
+                        entityId = item.itemId.replace('job-', '');
+                        // Real job uses the dedicated stage patch endpoint
+                        endpoint = `http://127.0.0.1:5000/jobs/${entityId}/stage`;  
+                        method = "PATCH";
+                    } else if (isProject) {
+                        entityId = item.itemId.replace('project-', '');
+                        // Project update uses the PUT /projects/{id} route (updates the Project Model)
+                        endpoint = `http://127.0.0.1:5000/projects/${entityId}`;
+                        method = "PUT"; // PUT is needed to send the full body including `stage`
+                    } else if (isCustomer) {
+                        entityId = item.itemId.replace('customer-', '');
+                        // Customer lead uses the customer stage patch endpoint
+                        endpoint = `http://127.0.0.1:5000/customers/${entityId}/stage`;
+                        method = "PATCH";
+                    } else {
+                        throw new Error(`Unknown pipeline item type: ${item.itemId}`);
+                    }
+                    
+                    // Retrieve original item data to send full body for PUT requests (Projects)
+                    const originalItem = pipelineItems.find(pi => pi.id === item.itemId);
+                    let bodyData: any;
 
-                        const response = await fetch(endpoint, {
-                            method: "PATCH",
-                            headers: getAuthHeaders(), // NEW - FIX
-                            body: JSON.stringify({
-                                stage: newStage,
-                                // CRITICAL: We include the reason, which will trigger the logging on the backend.
-                                reason: "Moved via Kanban board", 
-                                updated_by: user?.email || "current_user"
-                            }),
-                        });
+                    if (isProject) {
+                        // For a Project PUT, we must send the whole object (or at least the fields the backend expects).
+                        // We use the last known good state from pipelineItems and only change the stage.
+                        bodyData = {
+                            ...originalItem?.job, // Copy existing Project data fields
+                            project_name: originalItem?.job?.job_name,
+                            project_type: originalItem?.job?.job_type,
+                            stage: newStage, // Update the stage
+                            updated_by: user?.email || "current_user",
+                        };
+                    } else {
+                        // For PATCH (Job/Customer), only send the stage and audit details.
+                        bodyData = {
+                            stage: newStage,
+                            reason: "Moved via Kanban board", 
+                            updated_by: user?.email || "current_user"
+                        };
+                    }
+
+                    const response = await fetch(endpoint, {
+                        method: method,
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify(bodyData),
+                    });
 
                     if (!response.ok) {
                         const errorData = await response.json();
@@ -632,7 +697,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                     
                     const auditEntry: AuditLog = {
                         audit_id: `audit-${Date.now()}-${item.itemId}`, 
-                        entity_type: item.itemType === 'customer' ? 'Customer' : 'Job',
+                        entity_type: isCustomer ? 'Customer' : (isProject ? 'Project' : 'Job'), // Use correct entity type for audit
                         entity_id: item.itemId,
                         action: "update",
                         changed_by: user?.email || "current_user",
@@ -641,7 +706,8 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                     };
                     setAuditLogs((prev) => [auditEntry, ...prev.slice(0, 4)]);
 
-                    if (newStage === "Accepted" && item.itemType === 'job' && (userRole === "Manager" || userRole === "HR" || userRole === "Sales")) {
+                    // Automation only runs for actual Job model items
+                    if (newStage === "Accepted" && isJob && (userRole === "Manager" || userRole === "HR" || userRole === "Sales")) {
                         try {
                             await fetch(`http://127.0.0.1:5000/invoices`, {
                                 method: "POST",
@@ -673,6 +739,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         }
     };
 
+    // --- FIX: Updated refetchPipelineData (simplified for single endpoint reliability) ---
     const refetchPipelineData = async () => {
         try {
             const pipelineResponse = await fetch('http://127.0.0.1:5000/pipeline', { headers: getAuthHeaders() });
@@ -680,6 +747,8 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                 const pipelineData = await pipelineResponse.json();
 
                 const items = pipelineData.map((item: any) => {
+                    const isProjectItem = item.id.startsWith('project-');
+
                     const primaryStage = item.type === 'customer' 
                         ? item.customer.stage 
                         : (item.job?.stage || item.customer.stage);
@@ -706,14 +775,25 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                         const jobStage = item.job?.stage ? 
                             (STAGES.includes(item.job.stage) ? item.job.stage : 'Lead') : 
                             validStage;
+                        
+                        // CRITICAL FIX: Correctly extract name and reference for Project vs Job
+                        const jobReference = isProjectItem 
+                            ? item.job.job_reference || `PROJ-${item.job.id.slice(-4).toUpperCase()}`
+                            : item.job.job_reference || `JOB-${item.job.id.slice(-4).toUpperCase()}`;
+
+                        // CRITICAL FIX: Generate unique name for Project items
+                        const jobName = isProjectItem ? `${item.customer.name} - ${item.job.job_name}` : item.customer.name;
+
 
                         return {
                             ...commonItem,
-                            type: 'job' as const,
+                            type: isProjectItem ? 'project' as const : 'job' as const,
                             job: item.job,
-                            reference: item.job.job_reference || `JOB-${item.job.id.slice(-4).toUpperCase()}`,
+                            name: jobName,
+                            reference: jobReference,
                             stage: jobStage as Stage,
                             jobType: item.job.job_type,
+                            // Note: Quote/Agreed/Deposit fields will be null/false if it's a Project from the backend fix
                             quotePrice: item.job.quote_price,
                             agreedPrice: item.job.agreed_price,
                             soldAmount: item.job.sold_amount,
@@ -722,6 +802,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                             deposit1Paid: item.job.deposit1_paid || false,
                             deposit2Paid: item.job.deposit2_paid || false,
                             deliveryDate: item.job.delivery_date,
+                            measureDate: item.job.measure_date,
                         };
                     }
                 });
@@ -734,7 +815,8 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                 prevFeaturesRef.current = updatedFeatures;
             }
         } catch (pipelineError) {
-            console.log('Pipeline refetch failed, using fallback');
+            console.log('Pipeline refetch failed, using original state fallback');
+            // If refetch fails, do nothing to avoid resetting the board unintentionally
         }
     };
 
@@ -858,7 +940,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
     );
 
     // Handle stage change with audit logging
-    const handleStageChange = async (itemId: string, newStage: Stage, reason: string, itemType: 'customer' | 'job') => {
+    const handleStageChange = async (itemId: string, newStage: Stage, reason: string, itemType: 'customer' | 'job' | 'project') => {
         // Check permissions
         const item = pipelineItems.find(i => i.id === itemId);
         if (!item || !canUserEditItem(item)) {
@@ -867,18 +949,68 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         }
 
         try {
-            const entityId = itemId.replace('customer-', '').replace('job-', '');
-            const endpoint = itemType === 'customer'
-                ? `http://127.0.0.1:5000/customers/${entityId}`
-                : `http://127.0.0.1:5000/jobs/${entityId}`;
+            // 💡 FIX 1: Determine endpoint and entity ID based on item type prefix
+            const isProject = itemId.startsWith('project-');
+            const isCustomer = itemId.startsWith('customer-');
+            const isJob = itemId.startsWith('job-');
+
+            let entityId;
+            let endpoint;
+            let method;
+
+            if (isJob) {
+                entityId = itemId.replace('job-', '');
+                // Real job uses the dedicated stage patch endpoint
+                endpoint = `http://127.0.0.1:5000/jobs/${entityId}/stage`;  
+                method = "PATCH";
+            } else if (isProject) {
+                entityId = itemId.replace('project-', '');
+                // Project update uses the PUT /projects/{id} route
+                endpoint = `http://127.0.0.1:5000/projects/${entityId}`;
+                method = "PUT";
+            } else if (isCustomer) {
+                entityId = itemId.replace('customer-', '');
+                // Customer lead uses the customer stage patch endpoint
+                endpoint = `http://127.0.0.1:5000/customers/${entityId}/stage`;
+                method = "PATCH";
+            } else {
+                throw new Error(`Unknown pipeline item type: ${itemId}`);
+            }
+            
+            // Retrieve original item data to send full body for PUT requests (Projects)
+            const originalItem = pipelineItems.find(pi => pi.id === itemId);
+            let bodyData: any;
+
+            if (isProject) {
+                // For a Project PUT, we must send the whole object (or at least the fields the backend expects).
+                // We use the last known good state from pipelineItems and only change the stage.
+                bodyData = {
+                    project_name: originalItem?.job?.job_name,
+                    project_type: originalItem?.job?.job_type,
+                    date_of_measure: originalItem?.job?.measure_date,
+                    notes: originalItem?.job?.notes,
+                    stage: newStage, // Update the stage
+                    updated_by: user?.email || "current_user",
+                };
+            } else {
+                // For PATCH (Job/Customer), only send the stage and audit details.
+                bodyData = {
+                    stage: newStage,
+                    reason: reason,
+                    updated_by: user?.email || "current_user"
+                };
+            }
 
             const response = await fetch(endpoint, {
-                method: "PUT",
+                method: method,
                 headers: getAuthHeaders(),
-                body: JSON.stringify({ stage: newStage, reason }),
+                body: JSON.stringify(bodyData),
             });
 
-            if (!response.ok) throw new Error("Failed to update stage");
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Failed to update stage for ${item.type} ${entityId}`);
+            }
 
             // Refresh the entire pipeline data to ensure consistency (using refetch helper)
             await refetchPipelineData();
@@ -886,7 +1018,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
             // Log audit entry
             const auditEntry: AuditLog = {
                 audit_id: `audit-${Date.now()}`,
-                entity_type: itemType === 'customer' ? 'Customer' : 'Job',
+                entity_type: isCustomer ? 'Customer' : (isProject ? 'Project' : 'Job'),
                 entity_id: itemId,
                 action: "update",
                 changed_by: user?.email || "current_user",
@@ -895,8 +1027,8 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
             };
             setAuditLogs((prev) => [auditEntry, ...prev.slice(0, 4)]);
 
-            // Trigger automation for "Accepted" stage - only for authorized users
-            if (newStage === "Accepted" && itemType === 'job' && permissions.canSendQuotes) {
+            // Trigger automation for "Accepted" stage - only for real job entities
+            if (newStage === "Accepted" && isJob && permissions.canSendQuotes) {
                 try {
                     await fetch(`http://127.0.0.1:5000/invoices`, {
                         method: "POST",
@@ -915,18 +1047,25 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
     };
 
     // Action handlers
-    const handleOpenItem = (itemId: string, itemType: 'customer' | 'job') => {
-        if (itemType === 'customer') {
-            const customerId = itemId.replace('customer-', '');
-            window.location.href = `/customers/${customerId}`;
+    const handleOpenItem = (itemId: string, itemType: 'customer' | 'job' | 'project') => {
+        // 💡 FIX: Handle the new 'project-' prefix and route to the correct page (Job page for now, as it holds project context)
+        const entityId = itemId.replace('customer-', '').replace('job-', '').replace('project-', '');
+        
+        if (itemType === 'customer' || itemType === 'project') {
+            // Projects are usually managed through the Customer's page or a dedicated project page
+            // Assuming linking back to the customer's page to view the list of projects is best for now
+            // CRITICAL: We need the CUSTOMER ID for the customer page, so we look up the customer object.
+            const item = pipelineItems.find(i => i.id === itemId);
+            const customerId = item?.customer.id || entityId;
+            window.location.href = `/dashboard/customers/${customerId}`; // Updated to dashboard/customers
         } else {
-            const jobId = itemId.replace('job-', '');
-            window.location.href = `/jobs/${jobId}`;
+            // Real Job
+            window.location.href = `/dashboard/jobs/${entityId}`; // Updated to dashboard/jobs
         }
     };
 
     const handleOpenCustomer = (customerId: string) => {
-        window.location.href = `/customers/${customerId}`;
+        window.location.href = `/dashboard/customers/${customerId}`;
     };
 
     const handleCreateJob = () => {
@@ -934,7 +1073,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
             alert("You don't have permission to create new jobs.");
             return;
         }
-        window.location.href = '/jobs/new';
+        window.location.href = '/dashboard/jobs/new';
     };
 
     const handleCreateCustomer = () => {
@@ -942,7 +1081,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
             alert("You don't have permission to create new customers.");
             return;
         }
-        window.location.href = '/customers/new';
+        window.location.href = '/dashboard/customers/new';
     };
 
     const handleSendQuote = async (itemId: string) => {
@@ -952,7 +1091,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
         }
 
         try {
-            const entityId = itemId.replace('job-', '').replace('customer-', '');
+            const entityId = itemId.replace('job-', '').replace('customer-', '').replace('project-', '');
             await fetch(`http://127.0.0.1:5000/jobs/${entityId}/quotes`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1351,7 +1490,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                                                             </div>
                                                                         )}
                                                                     </div>
-                                                                    
+                                                                        
                                                                     {/* Action Buttons (fixed to the bottom with padding) */}
                                                                     <div className="flex gap-1 pt-2 pb-1">
                                                                         <Button
@@ -1362,7 +1501,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                                                                 e.stopPropagation();
                                                                                 handleOpenItem(feature.itemId, feature.itemType);
                                                                             }}
-                                                                            title={`Open ${feature.itemType === 'customer' ? 'Customer' : 'Job'}`}
+                                                                            title={`Open ${feature.itemType === 'customer' ? 'Customer' : (feature.itemType === 'project' ? 'Project' : 'Job')}`}
                                                                         >
                                                                             <Eye className="h-3 w-3" />
                                                                         </Button>
@@ -1399,8 +1538,8 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                                                             </Button>
                                                                         )}
 
-                                                                        {/* Show documents for jobs */}
-                                                                        {feature.itemType === 'job' && (
+                                                                        {/* Show documents for jobs/projects */}
+                                                                        {(feature.itemType === 'job' || feature.itemType === 'project') && (
                                                                             <Button
                                                                                 size="sm"
                                                                                 variant="ghost"
@@ -1461,7 +1600,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                     <div className="grid grid-cols-12 gap-4 items-center text-sm">
                                         <div className="flex items-center gap-2">
                                             <Badge variant={item.type === 'customer' ? 'secondary' : 'default'} className="text-xs">
-                                                {item.type === 'customer' ? 'Customer' : 'Job'}
+                                                {item.type === 'customer' ? 'Customer' : (item.type === 'project' ? 'Project' : 'Job')}
                                             </Badge>
                                             {!isEditable && <Lock className="h-3 w-3 text-gray-400" />}
                                         </div>
@@ -1513,7 +1652,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                                 <DropdownMenuContent align="end">
                                                     <DropdownMenuItem onClick={() => handleOpenItem(item.id, item.type)}>
                                                         <Eye className="h-4 w-4 mr-2" />
-                                                        Open {item.type === 'customer' ? 'Customer' : 'Job'}
+                                                        Open {item.type === 'customer' ? 'Customer' : (item.type === 'project' ? 'Project' : 'Job')}
                                                     </DropdownMenuItem>
                                                     <DropdownMenuItem onClick={() => handleOpenCustomer(item.customer.id)}>
                                                         <Users className="h-4 w-4 mr-2" />
@@ -1532,7 +1671,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                                             Schedule
                                                         </DropdownMenuItem>
                                                     )}
-                                                    {item.type === 'job' && (
+                                                    {(item.type === 'job' || item.type === 'project') && (
                                                         <DropdownMenuItem onClick={() => handleViewDocuments(item.id)}>
                                                             <File className="h-4 w-4 mr-2" />
                                                             View Documents
@@ -1564,7 +1703,6 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                                                         {item.customer.email}
                                                     </div>
                                                 )}
-                                                {/* CONFIRMED: Notes block is removed from here */}
                                                 
                                                 {permissions.canViewFinancials && (item.deposit1 || item.deposit2) && (
                                                     <div className="flex gap-4">
@@ -1634,7 +1772,7 @@ const mapPipelineToFeatures = (items: PipelineItem[]) => {
                     </DialogHeader>
                     <div className="space-y-4">
                         <p>
-                            Are you sure you want to change the {editDialog.itemType} stage to <strong>{editDialog.newStage}</strong>?
+                            Are you sure you want to change the **{editDialog.itemType}** stage to **{editDialog.newStage}**?
                         </p>
                         <Input
                             placeholder="Reason for change"

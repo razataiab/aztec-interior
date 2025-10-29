@@ -69,9 +69,14 @@ export default function CreateProjectPage() {
       const newFormData = { ...prev, [name]: value };
       
       // Update project name default if project type changes
-      if (name === 'project_type' && !prev.project_name.startsWith(customerName)) {
-         newFormData.project_name = `${customerName}'s Project (${value})`;
+      if (name === 'project_type' && prev.project_name && prev.project_name.includes(customerName) && prev.project_name.includes(prev.project_type)) {
+           // Only update the type part if the name is the auto-generated default
+           newFormData.project_name = newFormData.project_name.replace(`(${prev.project_type})`, `(${value})`);
+      } else if (name === 'project_type' && customerName && !prev.project_name) {
+          // If name is empty, create the default
+          newFormData.project_name = `${customerName}'s Project (${value})`;
       }
+
       return newFormData;
     });
   };
@@ -129,7 +134,7 @@ export default function CreateProjectPage() {
         
         // This is the true network failure catch.
         console.error('Network Error:', err);
-        setError('Network error: Could not connect to the API server at http://127.0.0.1:5000.');
+        setError('Network error: Could not connect to the API server at http://127.0.0.1:5000. Please ensure the Flask server is running.'); // Updated error message for clarity
     } finally {
         setLoading(false);
     }

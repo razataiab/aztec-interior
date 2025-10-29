@@ -23,7 +23,7 @@ interface FormData {
   completion_date: string;
   deposit_date: string;
   door_style: string;
-  glazing_material: string; // New field for Glazed option
+  glazing_material: string; 
   door_color: string;
   end_panel_color: string;
   plinth_filler_color: string;
@@ -62,6 +62,14 @@ interface FormData {
   gas_electric_info: string;
   appliance_promotion_info: string;
   signature_date: string;
+  // --- NEW FIELDS FOR INTEGRATED FRIDGE/FREEZER DETAILS ---
+  integ_fridge_qty: string;
+  integ_fridge_details: string;
+  integ_fridge_order_date: string;
+  integ_freezer_qty: string;
+  integ_freezer_details: string;
+  integ_freezer_order_date: string;
+  // --------------------------------------------------------
 }
 
 export default function FormPage() {
@@ -88,7 +96,7 @@ export default function FormPage() {
     completion_date: '',
     deposit_date: '',
     door_style: '',
-    glazing_material: '', // Initialize new field
+    glazing_material: '', 
     door_color: '',
     end_panel_color: '',
     plinth_filler_color: '',
@@ -122,11 +130,26 @@ export default function FormPage() {
     sink_details: '',
     tap_details: '',
     other_appliances: '',
-    appliances: [],
+    appliances: [ 
+      { details: '', order_date: '' }, // Oven - Index 0
+      { details: '', order_date: '' }, // Microwave - Index 1
+      { details: '', order_date: '' }, // Washing Machine - Index 2
+      { details: '', order_date: '' }, // HOB - Index 3
+      { details: '', order_date: '' }, // Extractor - Index 4
+      { details: '', order_date: '' }, // INTG Dishwasher - Index 5
+    ],
     terms_date: '',
     gas_electric_info: '',
     appliance_promotion_info: '',
-    signature_date: ''
+    signature_date: '',
+    // --- NEW FIELDS INITIALIZED ---
+    integ_fridge_qty: '',
+    integ_fridge_details: '',
+    integ_fridge_order_date: '',
+    integ_freezer_qty: '',
+    integ_freezer_details: '',
+    integ_freezer_order_date: '',
+    // ----------------------------
   });
 
   useEffect(() => {
@@ -227,7 +250,6 @@ export default function FormPage() {
   const handleApplianceChange = (index: number, field: keyof Appliance, value: string) => {
     setFormData(prev => {
       const appliances = [...prev.appliances];
-      // Ensure the appliance object exists
       if (!appliances[index]) {
         appliances[index] = { details: '', order_date: '' };
       }
@@ -249,14 +271,15 @@ export default function FormPage() {
 
   const validateForm = () => {
     const errors: string[] = [];
-
+    const isClientOwned = formData.appliances_customer_owned === 'no';
+    
     // Customer Information
     if (!formData.customer_name?.trim()) errors.push('Customer Name');
     if (!formData.customer_phone?.trim()) errors.push('Tel/Mobile Number');
     if (!formData.customer_address?.trim()) errors.push('Address');
     
     // Design Specifications
-    if (formType === "kitchen" && !formData.door_style?.trim()) errors.push('Door Style'); // Only required for Kitchen now
+    if (formType === "kitchen" && !formData.door_style?.trim()) errors.push('Door Style');
     
     // Conditional Glazing Material
     if (formType === "kitchen" && formData.door_style === 'glazed' && !formData.glazing_material?.trim()) {
@@ -294,18 +317,39 @@ export default function FormPage() {
       if (!formData.under_wall_unit_lights_profile?.trim()) errors.push('Under Wall Unit Lights Profile');
       if (!formData.under_worktop_lights_color?.trim()) errors.push('Under Worktop Lights Color');
       if (!formData.kitchen_accessories?.trim()) errors.push('Accessories');
-      if (!formData.appliances_customer_owned?.trim()) errors.push('Appliances Customer Owned');
-      if (!formData.sink_tap_customer_owned?.trim()) errors.push('Sink & Tap Customer Owned');
       
-      if (formData.appliances_customer_owned === 'no') {
-        const hasAppliances = formData.appliances.some(app => app.details?.trim() || app.order_date?.trim());
-        if (!hasAppliances) errors.push('At least one Appliance detail');
+      // Appliances and Sink/Tap ownership status must be selected
+      if (!formData.appliances_customer_owned?.trim()) errors.push('Appliances Customer Owned Selection');
+      if (!formData.sink_tap_customer_owned?.trim()) errors.push('Sink & Tap Customer Owned Selection');
+      
+      // --- START VALIDATION MODIFICATION ---
+
+      if (formData.appliances_customer_owned) {
+        // Validation check for standard appliances (Details is always checked, Order Date only if not customer owned)
+        const hasStandardAppliances = formData.appliances.some(app => 
+            app.details?.trim() || (isClientOwned && app.order_date?.trim())
+        );
+
+        // Validation check for Integrated units
+        const hasFridge = formData.integ_fridge_qty?.trim() || formData.integ_fridge_details?.trim() || (isClientOwned && formData.integ_fridge_order_date?.trim());
+        const hasFreezer = formData.integ_freezer_qty?.trim() || formData.integ_freezer_details?.trim() || (isClientOwned && formData.integ_freezer_order_date?.trim());
+        const hasOther = formData.other_appliances?.trim();
+        
+        if (!hasStandardAppliances && !hasFridge && !hasFreezer && !hasOther) {
+             errors.push('At least one Appliance detail (Details/Qty/Order Date) must be filled.');
+        }
+
+        // Additional validation for QTY fields:
+        if (formData.integ_fridge_qty && isNaN(parseInt(formData.integ_fridge_qty))) errors.push('Integrated Fridge Quantity must be a number.');
+        if (formData.integ_freezer_qty && isNaN(parseInt(formData.integ_freezer_qty))) errors.push('Integrated Freezer Quantity must be a number.');
       }
       
-      if (formData.sink_tap_customer_owned === 'no') {
+      // Require Sink & Tap details if EITHER 'Yes' or 'No' is selected (i.e., if it's not empty)
+      if (formData.sink_tap_customer_owned) {
         if (!formData.sink_details?.trim()) errors.push('Sink Details');
         if (!formData.tap_details?.trim()) errors.push('Tap Details');
       }
+      // --- END VALIDATION MODIFICATION ---
     }
 
     // Terms
@@ -340,12 +384,40 @@ export default function FormPage() {
 
     const token = searchParams.get("token") || '';
     const customerIdFromUrl = searchParams.get("customerId") || '';
+    const isClientOwned = formData.appliances_customer_owned === 'no';
     
+    // Prepare final appliance list for submission, consolidating integrated units
+    const finalAppliances = [...formData.appliances];
+    
+    // Add Integrated Fridge details if any field is filled
+    if (formData.integ_fridge_qty?.trim() || formData.integ_fridge_details?.trim() || formData.integ_fridge_order_date?.trim()) {
+        finalAppliances.push({
+            details: `INTG Fridge (QTY: ${formData.integ_fridge_qty || '1'}): ${formData.integ_fridge_details || 'No model specified'}`,
+            order_date: isClientOwned ? formData.integ_fridge_order_date || '' : ''
+        });
+    }
+
+    // Add Integrated Freezer details if any field is filled
+    if (formData.integ_freezer_qty?.trim() || formData.integ_freezer_details?.trim() || formData.integ_freezer_order_date?.trim()) {
+        finalAppliances.push({
+            details: `INTG Freezer (QTY: ${formData.integ_freezer_qty || '1'}): ${formData.integ_freezer_details || 'No model specified'}`,
+            order_date: isClientOwned ? formData.integ_freezer_order_date || '' : ''
+        });
+    }
+
     const finalFormData = {
       ...formData,
+      appliances: finalAppliances, 
       signature_data: signatureData,
       form_type: formType,
       customer_id: customerIdFromUrl || formData.customer_id || '',
+      // Remove the separate fridge/freezer fields as they are now consolidated
+      integ_fridge_qty: undefined,
+      integ_fridge_details: undefined,
+      integ_fridge_order_date: undefined,
+      integ_freezer_qty: undefined,
+      integ_freezer_details: undefined,
+      integ_freezer_order_date: undefined,
     };
 
     setIsSubmitting(true);
@@ -394,9 +466,27 @@ export default function FormPage() {
     } finally {
       setIsSubmitting(false);
     }
-  };	
+  }; 	
 
   if (!valid) return <p className="p-6 text-center">Invalid or expired link.</p>;
+
+  // Check if order date should be displayed (only if NOT customer owned)
+  const showOrderDate = formData.appliances_customer_owned === 'no';
+  
+  // Define column layout for appliance items
+  // When Order Date is hidden (2 columns needed: Details and Quantity/Details), use grid-cols-5
+  // When Order Date is visible (3 columns needed: Details, Order Date), use grid-cols-3
+  // Setting fixed widths for better visual balance: Details=2/3, Date=1/3
+  const standardApplianceGridTemplate = showOrderDate ? 'grid-cols-[2fr_1fr]' : 'grid-cols-1';
+  // Setting fixed widths for integrated units: Details/QTY = 2/3, Date=1/3
+  const integUnitGridTemplate = showOrderDate ? 'grid-cols-[1.5fr_0.5fr_1fr]' : 'grid-cols-[1.5fr_0.5fr]';
+
+
+  // --- Appliance List for rendering (Oven, Hob, etc.) ---
+  const standardAppliances = [
+    'Oven', 'Microwave', 'Washing Machine', 'HOB', 
+    'Extractor', 'INTG Dishwasher',
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -434,7 +524,6 @@ export default function FormPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Customer Name</label>
-                {/* All Inputs use w-full now */}
                 <Input 
                   placeholder="Enter customer name" 
                   className="w-full" 
@@ -509,7 +598,7 @@ export default function FormPage() {
                   >
                     <option value="">Select material</option>
                     <option value="vinyl">Vinyl</option>
-                    <option value="aluprne">Aluprne</option>
+                    <option value="aluminium">Aluminium</option>
                   </select>
                 </div>
               )}
@@ -838,11 +927,11 @@ export default function FormPage() {
                   ></textarea>
                 </div>
 
-                {/* Appliances Customer Owned */}
+                {/* Appliances Customer Owned Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Appliances Customer Owned</label>
                   <select 
-                    className="w-full p-2 border border-gray-300 rounded-md" // w-full applied here
+                    className="w-full p-2 border border-gray-300 rounded-md" 
                     value={formData.appliances_customer_owned}
                     onChange={(e) => handleInputChange('appliances_customer_owned', e.target.value)}
                   >
@@ -852,38 +941,123 @@ export default function FormPage() {
                   </select>
                 </div>
 
-                {/* Appliances List - Only show if customer owned is "no" */}
-                {formData.appliances_customer_owned === 'no' && (
+                {/* Appliances List - SHOW IF customer owned is "yes" OR "no" (i.e., not empty) */}
+                {!!formData.appliances_customer_owned && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Appliances</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">
+                      {formData.appliances_customer_owned === 'yes' 
+                        ? "Customer Owned Appliances Details" 
+                        : "Client Supplied Appliances Details (Require Order Date/Model)"
+                      }
+                    </label>
                     <div className="space-y-4">
-                      {[
-                        'Oven', 'Microwave', 'Washing Machine', 'HOB', 
-                        'Extractor', 'INTG Dishwasher', 'INTEG Fridge/Freezer'
-                      ].map((appliance, idx) => (
-                        <div key={appliance} className="grid grid-cols-2 gap-3"> {/* Changed to 2 columns */}
+                      {/* Standard Appliances (Oven, Hob, etc.) */}
+                      {standardAppliances.map((appliance, idx) => (
+                        // Use dynamic grid template for spacing
+                        <div key={appliance} className={`grid ${standardApplianceGridTemplate} gap-3`}>
                           <div>
                             <label className="block text-xs text-gray-600 mb-1">{appliance} Details</label>
                             <Input
-                              placeholder={`${appliance} details`}
+                              placeholder={`${appliance} details (e.g., Make/Model)`}
                               className="w-full"
                               value={formData.appliances[idx]?.details || ''}
                               onChange={(e) => handleApplianceChange(idx, 'details', e.target.value)}
                             />
                           </div>
-                          <div>
-                            <label className="block text-xs text-gray-600 mb-1">Order Date</label>
-                            <input
-                              type="date"
-                              className="w-full p-2 border border-gray-300 rounded-md"
-                              value={formData.appliances[idx]?.order_date || ''}
-                              onChange={(e) => handleApplianceChange(idx, 'order_date', e.target.value)}
-                            />
-                          </div>
+                          {/* --- CONDITIONAL ORDER DATE for Standard Appliances --- */}
+                          {showOrderDate && (
+                            <div>
+                              <label className="block text-xs text-gray-600 mb-1">Order Date</label>
+                              <input
+                                type="date"
+                                className="w-full p-2 border border-gray-300 rounded-md"
+                                value={formData.appliances[idx]?.order_date || ''}
+                                onChange={(e) => handleApplianceChange(idx, 'order_date', e.target.value)}
+                              />
+                            </div>
+                          )}
+                          {/* --------------------------------------------------- */}
                         </div>
                       ))}
+
+                      {/* --- Integrated Fridge/Freezer Vertical Layout --- */}
+                      <div className="grid grid-cols-1 gap-4 border-t pt-4">
+                        
+                        {/* Integrated Fridge ROW */}
+                        <div className="space-y-1">
+                          <label className="block text-sm font-medium text-gray-700">INTG Fridge</label>
+                          <div className={`grid ${integUnitGridTemplate} gap-3`}>
+                            
+                            {/* Model/Details (First - 1.5fr) */}
+                            <Input 
+                              placeholder="Model/Details" 
+                              className="col-span-1"
+                              value={formData.integ_fridge_details}
+                              onChange={(e) => handleInputChange('integ_fridge_details', e.target.value)}
+                            />
+                            
+                            {/* QTY (Second - 0.5fr) */}
+                            <Input 
+                              placeholder="QTY" 
+                              type="number" 
+                              className="col-span-1"
+                              value={formData.integ_fridge_qty}
+                              onChange={(e) => handleInputChange('integ_fridge_qty', e.target.value)}
+                            />
+                            
+                            {/* Order Date (Third - Conditional - 1fr) */}
+                            {showOrderDate && (
+                              <input
+                                type="date"
+                                placeholder="Order Date"
+                                className="col-span-1 p-2 border border-gray-300 rounded-md"
+                                value={formData.integ_fridge_order_date}
+                                onChange={(e) => handleInputChange('integ_fridge_order_date', e.target.value)}
+                              />
+                            )}
+                          </div>
+                        </div>
+                        
+                        {/* Integrated Freezer ROW */}
+                        <div className="space-y-1">
+                          <label className="block text-sm font-medium text-gray-700">INTG Freezer</label>
+                          <div className={`grid ${integUnitGridTemplate} gap-3`}>
+                            
+                            {/* Model/Details (First - 1.5fr) */}
+                            <Input 
+                              placeholder="Model/Details" 
+                              className="col-span-1"
+                              value={formData.integ_freezer_details}
+                              onChange={(e) => handleInputChange('integ_freezer_details', e.target.value)}
+                            />
+
+                            {/* QTY (Second - 0.5fr) */}
+                            <Input 
+                              placeholder="QTY" 
+                              type="number" 
+                              className="col-span-1"
+                              value={formData.integ_freezer_qty}
+                              onChange={(e) => handleInputChange('integ_freezer_qty', e.target.value)}
+                            />
+                            
+                            {/* Order Date (Third - Conditional - 1fr) */}
+                            {showOrderDate && (
+                              <input
+                                type="date"
+                                placeholder="Order Date"
+                                className="col-span-1 p-2 border border-gray-300 rounded-md"
+                                value={formData.integ_freezer_order_date}
+                                onChange={(e) => handleInputChange('integ_freezer_order_date', e.target.value)}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {/* --- END Integrated Fridge/Freezer Vertical Layout --- */}
+
+
                       <div>
-                        <label className="block text-xs text-gray-600 mb-1">Other / Misc</label>
+                        <label className="block text-xs text-gray-600 mb-1">Other / Misc Appliances</label>
                         <Input 
                           placeholder="Enter any additional appliances" 
                           className="w-full"
@@ -895,11 +1069,11 @@ export default function FormPage() {
                   </div>
                 )}
 
-                {/* Sink & Tap Customer Owned */}
+                {/* Sink & Tap Customer Owned Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Sink & Tap Customer Owned</label>
                   <select 
-                    className="w-full p-2 border border-gray-300 rounded-md" // w-full applied here
+                    className="w-full p-2 border border-gray-300 rounded-md" 
                     value={formData.sink_tap_customer_owned}
                     onChange={(e) => handleInputChange('sink_tap_customer_owned', e.target.value)}
                   >
@@ -909,22 +1083,22 @@ export default function FormPage() {
                   </select>
                 </div>
 
-                {/* Sink & Tap Details - Only show if customer owned is "no" */}
-                {formData.sink_tap_customer_owned === 'no' && (
+                {/* Sink & Tap Details - SHOW IF customer owned is "yes" OR "no" (i.e., not empty) */}
+                {!!formData.sink_tap_customer_owned && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Sink</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Sink Details</label>
                       <Input 
-                        placeholder="Sink details" 
+                        placeholder="Sink details (e.g., Make/Model/Size)" 
                         className="w-full"
                         value={formData.sink_details}
                         onChange={(e) => handleInputChange('sink_details', e.target.value)}
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Tap</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Tap Details</label>
                       <Input 
-                        placeholder="Tap details" 
+                        placeholder="Tap details (e.g., Make/Model)" 
                         className="w-full"
                         value={formData.tap_details}
                         onChange={(e) => handleInputChange('tap_details', e.target.value)}
@@ -944,7 +1118,7 @@ export default function FormPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Date Terms and Conditions Given</label>
                 <Input 
                   type="date" 
-                  className="w-full" // w-full applied here
+                  className="w-full" 
                   value={formData.terms_date}
                   onChange={(e) => handleInputChange('terms_date', e.target.value)}
                 />
@@ -952,7 +1126,7 @@ export default function FormPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Gas and Electric Installation {formType === "kitchen" ? "Information" : "Terms"} Given</label>
                 <select 
-                  className="w-full p-2 border border-gray-300 rounded-md" // w-full applied here
+                  className="w-full p-2 border border-gray-300 rounded-md" 
                   value={formData.gas_electric_info}
                   onChange={(e) => handleInputChange('gas_electric_info', e.target.value)}
                 >
@@ -965,7 +1139,7 @@ export default function FormPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Appliance Promotion Information Given</label>
                   <select 
-                    className="w-full p-2 border border-gray-300 rounded-md" // w-full applied here
+                    className="w-full p-2 border border-gray-300 rounded-md" 
                     value={formData.appliance_promotion_info}
                     onChange={(e) => handleInputChange('appliance_promotion_info', e.target.value)}
                   >
@@ -1067,7 +1241,7 @@ export default function FormPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
               <Input 
                 type="date" 
-                className="w-full" // w-full applied here
+                className="w-full" 
                 value={formData.signature_date}
                 onChange={(e) => handleInputChange('signature_date', e.target.value)}
               />
