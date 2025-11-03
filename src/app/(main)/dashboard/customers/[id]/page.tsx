@@ -1977,6 +1977,7 @@ const handleConfirmDeleteDrawing = async () => {
               <p className="text-sm text-gray-600">Upload CADs, sketches, photos, or client documentation here.</p>
             </div>
           )}
+        </div>
 
         {/* FORM SUBMISSIONS SECTION */}
         <div className="mb-8 border-t border-gray-200 pt-8">
