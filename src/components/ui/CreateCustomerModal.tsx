@@ -13,7 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-// Removed Select imports as they are no longer used for Salesperson
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue
+} from "@/components/ui/select";
 import { fetchWithAuth } from "@/lib/api";
 
 type ProjectType = 'Bedroom' | 'Kitchen' | 'Other';
