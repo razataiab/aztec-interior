@@ -160,11 +160,10 @@ export default function CustomersPage() {
       if (response.ok) {
         const data = await response.json();
 
-        // Normalise API → UI
+        // Normalise API → UI - ensure postcode is always a string
         const normalised = data.map((c: any) => ({
           ...c,
-          postcode: c.post_code ?? c.postcode ?? "", // <-- the fix
-          post_code: undefined, // optional cleanup
+          postcode: c.postcode || c.post_code || "",
         }));
 
         console.log("Raw API Response:", data);
@@ -416,12 +415,17 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      {filteredCustomers.length === 0 && (
+      {isLoading ? (
+        <div className="py-12 text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent text-gray-600"></div>
+          <p className="mt-4 text-gray-500">Loading customers...</p>
+        </div>
+      ) : filteredCustomers.length === 0 ? (
         <div className="py-12 text-center text-gray-500">
           <p className="text-lg">No customers found.</p>
           {user?.role === "Sales" && <p className="mt-2 text-sm">Create your first customer to get started!</p>}
         </div>
-      )}
+      ) : null}
 
       <CreateCustomerModal
         isOpen={showCreateModal}

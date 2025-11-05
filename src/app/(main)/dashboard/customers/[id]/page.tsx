@@ -558,10 +558,10 @@ export default function CustomerDetailsPage() {
     window.open(viewUrl, "_blank");
   };
 
-  const handleDeleteDrawing = async (drawing: DrawingDocument) => {
+  const handleDeleteDrawing = async (doc: DrawingDocument) => {
     if (isDeletingDrawing) return;
 
-    setDrawingToDelete(drawing);
+    setDrawingToDelete(doc);
     setShowDeleteDrawingDialog(true);
   };
 
@@ -656,6 +656,12 @@ export default function CustomerDetailsPage() {
   };
 
   const handleEditProject = (projectId: string) => {
+    // Check for permission before editing
+    if (!canManageProjects()) {
+      alert("You do not have permission to edit projects.");
+      return;
+    }
+
     const projectToEdit = customer?.projects?.find((p) => p.id === projectId);
     if (!projectToEdit) {
       console.error("Project not found to edit");
@@ -727,6 +733,13 @@ export default function CustomerDetailsPage() {
     }
   };
 
+  // --- NEW PERMISSIVE FUNCTION (For Project Creation/Editing) ---
+  const canManageProjects = (): boolean => {
+    // Returns true if the user object exists and has a role, giving all authenticated users access.
+    return !!user?.role;
+  };
+  // -------------------------------------------------------------
+
   const canEdit = (): boolean => {
     if (!customer) return false;
     
@@ -751,7 +764,7 @@ export default function CustomerDetailsPage() {
   };
 
   const handleCreateProject = () => {
-    if (!canEdit() || !customer) return;
+    if (!canManageProjects() || !customer) return;
 
     const queryParams = new URLSearchParams({
       customerId: customer.id,
@@ -1599,7 +1612,8 @@ export default function CustomerDetailsPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onClick={handleCreateProject} className="flex items-center space-x-2">
+                  {/* Project Creation uses the permissive canManageProjects() */}
+                  <DropdownMenuItem onClick={handleCreateProject} className="flex items-center space-x-2" disabled={!canManageProjects()}>
                     <Briefcase className="h-4 w-4" />
                     <span>New Project</span>
                   </DropdownMenuItem>
@@ -1613,7 +1627,7 @@ export default function CustomerDetailsPage() {
                   <DropdownMenuItem onClick={handleCreateChecklist} className="flex items-center space-x-2">
                     <CheckSquare className="h-4 w-4" />
                     <span>Checklist</span>
-                  </DropdownMenuItem>
+                    </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleCreateQuote} className="flex items-center space-x-2">
                     <FileText className="h-4 w-4" />
                     <span>Quotation</span>
@@ -1795,7 +1809,7 @@ export default function CustomerDetailsPage() {
         <div className="mb-8 border-t border-gray-200 pt-8">
           <div className="mb-6 flex items-center justify-between">
             <h2 className="text-xl font-semibold text-gray-900">Projects ({customer.projects?.length || 0})</h2>
-            {canEdit() && (
+            {canManageProjects() && (
               <Button onClick={handleCreateProject} className="flex items-center space-x-2">
                 <Plus className="h-4 w-4" />
                 <span>New Project</span>
@@ -1843,15 +1857,18 @@ export default function CustomerDetailsPage() {
                         {project.notes && <p className="mt-3 line-clamp-2 text-sm text-gray-500">{project.notes}</p>}
                       </div>
                       <div className="ml-4 flex flex-shrink-0 flex-col space-y-2">
-                        <Button
-                          onClick={() => handleEditProject(project.id)}
-                          variant="default"
-                          size="sm"
-                          className="flex items-center space-x-2"
-                        >
-                          <Edit className="h-4 w-4" />
-                          <span>Edit Project</span>
-                        </Button>
+                        {/* Project Edit Button now uses the permissive canManageProjects() */}
+                        {canManageProjects() && (
+                          <Button
+                            onClick={() => handleEditProject(project.id)}
+                            variant="default"
+                            size="sm"
+                            className="flex items-center space-x-2"
+                          >
+                            <Edit className="h-4 w-4" />
+                            <span>Edit Project</span>
+                          </Button>
+                        )}
                         <Button
                           onClick={() => handleViewProjectDetails(project)}
                           variant="outline"
@@ -2072,15 +2089,18 @@ export default function CustomerDetailsPage() {
                 </DialogDescription>
               </div>
               <div className="flex items-center space-x-2">
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={() => selectedProject && handleEditProject(selectedProject.id)}
-                  className="flex items-center space-x-2"
-                >
-                  <Edit className="h-4 w-4" />
-                  <span>Edit</span>
-                </Button>
+                {/* Edit Button inside dialog now uses canManageProjects() */}
+                {canManageProjects() && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => selectedProject && handleEditProject(selectedProject.id)}
+                    className="flex items-center space-x-2"
+                  >
+                    <Edit className="h-4 w-4" />
+                    <span>Edit</span>
+                  </Button>
+                )}
                 <Button variant="ghost" size="icon" onClick={() => setShowProjectDialog(false)}>
                   <X className="h-5 w-5" />
                 </Button>
