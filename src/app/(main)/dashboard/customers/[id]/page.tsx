@@ -3,49 +3,49 @@ import React, { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  ArrowLeft,
-  Edit,
-  FileText,
-  ChevronDown,
-  Briefcase,
-  CheckSquare,
-  Copy,
-  Check,
-  Phone,
-  Mail,
-  MessageSquare,
-  Calendar,
-  MapPin,
-  Plus,
-  Receipt,
-  DollarSign,
-  Trash2,
-  AlertCircle,
-  Eye,
-  X,
-  Package,
-  Image,
-  Upload,
+  ArrowLeft,
+  Edit,
+  FileText,
+  ChevronDown,
+  Briefcase,
+  CheckSquare,
+  Copy,
+  Check,
+  Phone,
+  Mail,
+  MessageSquare,
+  Calendar,
+  MapPin,
+  Plus,
+  Receipt,
+  DollarSign,
+  Trash2,
+  AlertCircle,
+  Eye,
+  X,
+  Package,
+  Image,
+  Upload,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { Label } from "@/components/ui/label"; // <-- ADD THIS
-import { Textarea } from "@/components/ui/textarea"; // <-- ADD THIS
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 // --- INTERFACES ---
 interface Project {
@@ -194,10 +194,8 @@ const DRAWING_DOCUMENT_ICONS: Record<string, React.ReactNode> = {
   other: <FileText className="h-4 w-4 text-gray-600" />,
 };
 
-// --- ADD THESE CONSTANTS ---
 const PROJECT_TYPES: Project["project_type"][] = ["Kitchen", "Bedroom", "Wardrobe", "Remedial", "Other"];
 
-// Combined stages from getStageColor and job filtering logic for a comprehensive list
 const PROJECT_STAGES = [
   "Lead",
   "Quote",
@@ -212,7 +210,6 @@ const PROJECT_STAGES = [
   "Remedial",
   "Other",
 ];
-// --- END OF ADDITION ---
 
 const formatDate = (dateString: string) => {
   if (!dateString) return "—";
@@ -263,7 +260,6 @@ const getStageColor = (stage: string) => {
 const formatDateForInput = (dateString: string | null | undefined): string => {
   if (!dateString) return "";
   try {
-    // Split at 'T' if it's a full ISO string, works for 'YYYY-MM-DD' too
     return dateString.split("T")[0];
   } catch {
     return "";
@@ -275,7 +271,7 @@ export default function CustomerDetailsPage() {
   const router = useRouter();
   const { user } = useAuth();
   const id = params?.id as string;
-  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for the hidden file input
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [financialDocs, setFinancialDocs] = useState<FinancialDocument[]>([]);
   const [drawingDocuments, setDrawingDocuments] = useState<DrawingDocument[]>([]);
@@ -293,7 +289,6 @@ export default function CustomerDetailsPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [hasAccess, setHasAccess] = useState(true);
 
-  // NEW: Project detail dialog state
   const [showProjectDialog, setShowProjectDialog] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectForms, setProjectForms] = useState<FormSubmission[]>([]);
@@ -323,33 +318,34 @@ export default function CustomerDetailsPage() {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    fetch(`https://aztec-interiors.onrender.com/customers/${id}`, { headers })
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch customer");
-        return res.json();
-      })
+    // Fetch customer data
+    const customerPromise = fetch(`https://aztec-interiors.onrender.com/customers/${id}`, { headers })
+      .then(res => res.json())
       .then((data) => {
+        // Normalize post_code → postcode
+        const normalizedCustomer = {
+          ...data,
+          postcode: data.post_code ?? data.postcode ?? "",
+        };
+
         if (user?.role === "Sales" && data.created_by !== user.id && data.salesperson !== user.name) {
           setHasAccess(true);
         } else if (user?.role === "Staff") {
           const hasPermission = data.created_by === user.id || data.salesperson === user.name;
           setHasAccess(hasPermission);
           if (!hasPermission) {
-            setLoading(false);
             return;
           }
         } else {
           setHasAccess(true);
         }
 
-        setCustomer(data);
+        setCustomer(normalizedCustomer);
       })
       .catch((err) => console.error("Error loading customer:", err));
 
-    loadFinancialDocuments(headers);
-    loadDrawingDocuments(headers);
-
-    fetch(`https://aztec-interiors.onrender.com/jobs?customer_id=${id}`, { headers })
+    // Fetch jobs
+    const jobsPromise = fetch(`https://aztec-interiors.onrender.com/jobs?customer_id=${id}`, { headers })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch jobs");
         return res.json();
@@ -363,7 +359,14 @@ export default function CustomerDetailsPage() {
           setJobs(data);
         }
       })
-      .catch((err) => console.error("Error loading jobs:", err))
+      .catch((err) => console.error("Error loading jobs:", err));
+
+    // Load documents (don't need to wait for these)
+    loadFinancialDocuments(headers);
+    loadDrawingDocuments(headers);
+
+    // Wait for both critical fetches, then stop loading
+    Promise.all([customerPromise, jobsPromise])
       .finally(() => setLoading(false));
   };
 
@@ -423,7 +426,6 @@ export default function CustomerDetailsPage() {
       .catch((err) => console.error("Error loading financial documents:", err));
   };
 
-  // Load Drawing Documents
   const loadDrawingDocuments = (headers: HeadersInit) => {
     const url = `https://aztec-interiors.onrender.com/files/drawings?customer_id=${id}`;
 
@@ -432,23 +434,21 @@ export default function CustomerDetailsPage() {
         if (!res.ok) {
           if (res.status === 404 || res.status === 204) {
             setDrawingDocuments([]);
-            return null; // Return null to skip json parsing
+            return null;
           }
           console.error(`Failed to fetch drawings, status: ${res.status}`);
           throw new Error(`Failed to fetch drawings (status: ${res.status})`);
         }
-        // Check for content type
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.indexOf("application/json") !== -1) {
           return res.json();
         } else {
-          return null; // Return null instead of empty array
+          return null;
         }
       })
       .then((data) => {
-        if (data === null) return; // Skip if no data
+        if (data === null) return;
 
-        // Ensure we have an array
         if (Array.isArray(data)) {
           setDrawingDocuments(data);
         } else {
@@ -481,7 +481,6 @@ export default function CustomerDetailsPage() {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    // Upload each file
     for (const file of Array.from(files)) {
       console.log(`📤 Uploading: ${file.name} (${file.type})`);
 
@@ -502,7 +501,6 @@ export default function CustomerDetailsPage() {
           const data = await response.json();
           console.log("✅ Upload successful:", data);
 
-          // Verify the response structure
           if (data.drawing && data.drawing.id) {
             const newDoc: DrawingDocument = {
               id: data.drawing.id,
@@ -515,10 +513,8 @@ export default function CustomerDetailsPage() {
 
             console.log("📄 Adding document to state:", newDoc);
 
-            // Update state immediately
             setDrawingDocuments((prev) => {
               const updated = [...prev, newDoc];
-              // Sort by date, newest first
               return updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
             });
 
@@ -540,7 +536,6 @@ export default function CustomerDetailsPage() {
       }
     }
 
-    // Clear the input to allow re-uploading the same file
     if (event.target) {
       event.target.value = "";
     }
@@ -548,70 +543,62 @@ export default function CustomerDetailsPage() {
     console.log("📄 Upload process complete");
   };
 
-  // FUNCTION: Triggers the hidden file input click
   const handleUploadDrawing = () => {
-    // ➕ ADDED CONSOLE LOG
     console.log("🚀 handleUploadDrawing: Triggering file input click...");
     if (fileInputRef.current) {
-      fileInputRef.current.click(); // Opens the native file explorer filtered by 'accept'
+      fileInputRef.current.click();
     } else {
-      // ➕ ADDED CONSOLE ERROR
       console.error("🚨 handleUploadDrawing: fileInputRef is null or undefined!");
     }
   };
 
-  // NEW FUNCTION: Handle viewing a drawing/layout
   const handleViewDrawing = (doc: DrawingDocument) => {
-    // Use the full backend URL for viewing
     const viewUrl = `https://aztec-interiors.onrender.com${doc.url}`;
     console.log(`Attempting to view file: ${doc.filename}. URL: ${viewUrl}`);
-    window.open(viewUrl, "_blank"); // Open in a new tab
+    window.open(viewUrl, "_blank");
   };
 
   const handleDeleteDrawing = async (drawing: DrawingDocument) => {
-  if (isDeletingDrawing) return;
+    if (isDeletingDrawing) return;
 
-  setDrawingToDelete(drawing);
-  setShowDeleteDrawingDialog(true);
-};
+    setDrawingToDelete(drawing);
+    setShowDeleteDrawingDialog(true);
+  };
 
-const handleConfirmDeleteDrawing = async () => {
-  if (!drawingToDelete) return;
+  const handleConfirmDeleteDrawing = async () => {
+    if (!drawingToDelete) return;
 
-  setIsDeletingDrawing(true);
-  const token = localStorage.getItem("auth_token");
-  const headers: HeadersInit = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+    setIsDeletingDrawing(true);
+    const token = localStorage.getItem("auth_token");
+    const headers: HeadersInit = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  try {
-    const res = await fetch(
-      `https://aztec-interiors.onrender.com/files/drawings/${drawingToDelete.id}`,
-      { method: "DELETE", headers }
-    );
-
-    if (res.ok) {
-      // Remove from UI
-      setDrawingDocuments((prev) =>
-        prev.filter((d) => d.id !== drawingToDelete.id)
+    try {
+      const res = await fetch(
+        `https://aztec-interiors.onrender.com/files/drawings/${drawingToDelete.id}`,
+        { method: "DELETE", headers }
       );
-      setShowDeleteDrawingDialog(false);
-      setDrawingToDelete(null);
-    } else {
-      const err = await res.json().catch(() => ({ error: "Server error" }));
-      alert(`Failed to delete: ${err.error}`);
-    }
-  } catch (e) {
-    console.error(e);
-    alert("Network error");
-  } finally {
-    setIsDeletingDrawing(false);
-  }
-};
 
-  // NEW FUNCTION: Render Drawing Document Card
+      if (res.ok) {
+        setDrawingDocuments((prev) =>
+          prev.filter((d) => d.id !== drawingToDelete.id)
+        );
+        setShowDeleteDrawingDialog(false);
+        setDrawingToDelete(null);
+      } else {
+        const err = await res.json().catch(() => ({ error: "Server error" }));
+        alert(`Failed to delete: ${err.error}`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Network error");
+    } finally {
+      setIsDeletingDrawing(false);
+    }
+  };
+
   const renderDrawingDocument = (doc: DrawingDocument) => {
     const fileExtension = doc.filename.split(".").pop()?.toLowerCase() || "other";
-    // Use the 'type' field coming directly from the backend (mapped from category)
     const docType =
       doc.type ||
       (fileExtension === "pdf" ? "pdf" : ["png", "jpg", "jpeg", "gif"].includes(fileExtension) ? "image" : "other");
@@ -645,7 +632,6 @@ const handleConfirmDeleteDrawing = async () => {
     );
   };
 
-  // NEW: Load project-specific data
   const loadProjectData = async (projectId: string) => {
     const token = localStorage.getItem("auth_token");
     const headers: HeadersInit = {
@@ -656,11 +642,9 @@ const handleConfirmDeleteDrawing = async () => {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    // Filter forms by project
     const projectSpecificForms = customer?.form_submissions.filter((form) => form.project_id === projectId) || [];
     setProjectForms(projectSpecificForms);
 
-    // Filter financial docs by project
     const projectSpecificDocs = financialDocs.filter((doc) => doc.project_id === projectId);
     setProjectDocs(projectSpecificDocs);
   };
@@ -672,7 +656,6 @@ const handleConfirmDeleteDrawing = async () => {
   };
 
   const handleEditProject = (projectId: string) => {
-    // Find the project from the customer's project list
     const projectToEdit = customer?.projects?.find((p) => p.id === projectId);
     if (!projectToEdit) {
       console.error("Project not found to edit");
@@ -680,10 +663,8 @@ const handleConfirmDeleteDrawing = async () => {
       return;
     }
 
-    // Set the selected project (for ID and name)
     setSelectedProject(projectToEdit);
 
-    // Set the editable data for the form
     setEditProjectData({
       project_name: projectToEdit.project_name,
       project_type: projectToEdit.project_type,
@@ -692,14 +673,10 @@ const handleConfirmDeleteDrawing = async () => {
       notes: projectToEdit.notes,
     });
 
-    // Open the edit modal
     setShowEditProjectDialog(true);
-    // Ensure the 'view' modal is closed if it was open
     setShowProjectDialog(false);
   };
-  // --- END OF REPLACEMENT ---
 
-  // --- ADD THESE NEW HANDLERS ---
   const handleEditProjectInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setEditProjectData((prev) => ({ ...prev, [name]: value }));
@@ -722,7 +699,6 @@ const handleConfirmDeleteDrawing = async () => {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    // Ensure date is null if empty, not an empty string
     const dataToSave = {
       ...editProjectData,
       date_of_measure: editProjectData.date_of_measure || null,
@@ -740,10 +716,9 @@ const handleConfirmDeleteDrawing = async () => {
         throw new Error(errorData.error || `Failed to update project (status: ${response.status})`);
       }
 
-      // Success
       setShowEditProjectDialog(false);
       alert("Project updated successfully!");
-      loadCustomerData(); // Reload all customer data
+      loadCustomerData();
     } catch (error) {
       console.error("Error saving project:", error);
       alert(`Error: ${(error as Error).message}`);
@@ -751,12 +726,10 @@ const handleConfirmDeleteDrawing = async () => {
       setIsSavingProject(false);
     }
   };
-  // --- END OF ADDITION ---
 
   const canEdit = (): boolean => {
     if (!customer) return false;
     
-    // All staff roles can edit customers
     const allowedRoles = ["Manager", "HR", "Production", "Sales"];
     return allowedRoles.includes(user?.role || "");
   };
@@ -1223,11 +1196,9 @@ const handleConfirmDeleteDrawing = async () => {
         );
       }
       if (typeof v === "object" && v !== null) {
-        // Avoid pre-formatting simple objects like {key: value}
         if (Object.keys(v).some((key) => typeof v[key] === "object" && v[key] !== null && !Array.isArray(v[key]))) {
           return <pre className="rounded bg-white p-3 text-sm whitespace-pre-wrap">{JSON.stringify(v, null, 2)}</pre>;
         }
-        // Handle simple objects - might need refinement based on actual data
         return (
           <span className="text-sm">
             {Object.entries(v)
@@ -1329,10 +1300,9 @@ const handleConfirmDeleteDrawing = async () => {
           </div>
           <div className="rounded-lg bg-white p-4 shadow-sm">
             {customFinancialFields
-              .filter((k) => keys.includes(k) || k === "balance_to_pay") // Ensure balance always shows if relevant
+              .filter((k) => keys.includes(k) || k === "balance_to_pay")
               .map(
                 (k) =>
-                  // Use derivedData for value, but ensure key exists before rendering Row
                   derivedData.hasOwnProperty(k) && (
                     <Row key={k} label={humanizeLabel(k)} value={derivedData[k]} name={k} />
                   ),
@@ -1459,7 +1429,7 @@ const handleConfirmDeleteDrawing = async () => {
             onClick={() => {
               setSelectedForm(submission);
               setShowFormDialog(true);
-              setFormType(getFormType(submission)); // Set form type for dialog logic
+              setFormType(getFormType(submission));
             }}
             className="flex items-center space-x-1"
           >
@@ -1546,7 +1516,7 @@ const handleConfirmDeleteDrawing = async () => {
       });
 
       if (response.ok) {
-        loadCustomerData(); // Reload data to reflect deletion
+        loadCustomerData();
         setShowDeleteDialog(false);
         setFormToDelete(null);
       } else {
@@ -1589,12 +1559,16 @@ const handleConfirmDeleteDrawing = async () => {
 
   if (!customer) return <div className="p-8">Customer not found.</div>;
 
-  // Get all project types for display
-  const allProjectTypes = customer.projects?.map((p) => p.project_type).filter(Boolean) || [];
+  const projectTypesFromProjects = customer.projects?.map((p) => p.project_type) || [];
+  const projectTypesFromLegacyField = customer.project_types || [];
+
+  const allProjectTypes = Array.from(new Set([
+    ...projectTypesFromProjects,
+    ...projectTypesFromLegacyField,
+  ])).filter(Boolean);
 
   return (
     <div className="min-h-screen bg-white">
-      {/* HIDDEN FILE INPUT ELEMENT */}
       <input
         type="file"
         ref={fileInputRef}
@@ -1603,7 +1577,6 @@ const handleConfirmDeleteDrawing = async () => {
         multiple
         style={{ display: "none" }}
       />
-      {/* END HIDDEN FILE INPUT */}
 
       <div className="border-b border-gray-200 bg-white px-8 py-6">
         <div className="flex items-center justify-between">
@@ -1776,7 +1749,6 @@ const handleConfirmDeleteDrawing = async () => {
                 <div className="mt-1">
                   {allProjectTypes.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
-                      {/* Remove duplicates and display all unique project types */}
                       {Array.from(new Set(allProjectTypes)).map((type, index) => (
                         <span
                           key={index}
@@ -1870,7 +1842,6 @@ const handleConfirmDeleteDrawing = async () => {
                         </div>
                         {project.notes && <p className="mt-3 line-clamp-2 text-sm text-gray-500">{project.notes}</p>}
                       </div>
-                      {/* --- MODIFIED: Added Edit Button and container --- */}
                       <div className="ml-4 flex flex-shrink-0 flex-col space-y-2">
                         <Button
                           onClick={() => handleEditProject(project.id)}
@@ -1940,7 +1911,6 @@ const handleConfirmDeleteDrawing = async () => {
                         </div>
                       </div>
 
-                      {/* ⭐ THIS IS THE CRITICAL SECTION - BUTTONS GO HERE ⭐ */}
                       <div className="ml-6 flex items-center space-x-2">
                         <Button
                           onClick={() => handleViewDrawing(doc)}
@@ -1965,7 +1935,6 @@ const handleConfirmDeleteDrawing = async () => {
                           </Button>
                         )}
                       </div>
-                      {/* ⭐ END OF CRITICAL SECTION ⭐ */}
                     </div>
                   </div>
                 ))}
@@ -2087,6 +2056,7 @@ const handleConfirmDeleteDrawing = async () => {
         </div>
       </div>
 
+      {/* Dialogs remain the same as in your original code */}
       {/* PROJECT DETAILS DIALOG */}
       <Dialog open={showProjectDialog} onOpenChange={setShowProjectDialog}>
         <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto">
@@ -2101,7 +2071,6 @@ const handleConfirmDeleteDrawing = async () => {
                   Detailed view of project information, forms, and documents
                 </DialogDescription>
               </div>
-              {/* --- MODIFIED: Added Edit Button and container --- */}
               <div className="flex items-center space-x-2">
                 <Button
                   variant="default"
@@ -2121,7 +2090,6 @@ const handleConfirmDeleteDrawing = async () => {
 
           {selectedProject && (
             <div className="mt-6 space-y-6">
-              {/* Project Overview */}
               <section className="rounded-lg bg-gradient-to-br from-blue-50 to-indigo-50 p-6">
                 <h3 className="mb-4 text-lg font-semibold text-gray-900">Project Overview</h3>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -2162,7 +2130,6 @@ const handleConfirmDeleteDrawing = async () => {
                 )}
               </section>
 
-              {/* Project Forms */}
               <section>
                 <h3 className="mb-4 text-lg font-semibold text-gray-900">Forms ({projectForms.length})</h3>
                 {projectForms.length > 0 ? (
@@ -2199,7 +2166,6 @@ const handleConfirmDeleteDrawing = async () => {
                 )}
               </section>
 
-              {/* Project Documents */}
               <section>
                 <h3 className="mb-4 text-lg font-semibold text-gray-900">Financial Documents ({projectDocs.length})</h3>
                 {projectDocs.length > 0 ? (
@@ -2236,6 +2202,7 @@ const handleConfirmDeleteDrawing = async () => {
         </DialogContent>
       </Dialog>
 
+      {/* EDIT PROJECT DIALOG */}
       <Dialog open={showEditProjectDialog} onOpenChange={setShowEditProjectDialog}>
         <DialogContent className="sm:max-w-[600px]">
           <DialogHeader>
@@ -2246,7 +2213,6 @@ const handleConfirmDeleteDrawing = async () => {
           </DialogHeader>
           <form onSubmit={handleSaveProject}>
             <div className="grid gap-6 py-4">
-              {/* Project Name */}
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="project_name" className="text-right">
                   Project Name
@@ -2261,7 +2227,6 @@ const handleConfirmDeleteDrawing = async () => {
                 />
               </div>
 
-              {/* Project Type */}
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="project_type" className="text-right">
                   Project Type
@@ -2284,7 +2249,6 @@ const handleConfirmDeleteDrawing = async () => {
                 </Select>
               </div>
 
-              {/* Project Stage */}
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="stage" className="text-right">
                   Stage
@@ -2307,7 +2271,6 @@ const handleConfirmDeleteDrawing = async () => {
                 </Select>
               </div>
 
-              {/* Date of Measure */}
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="date_of_measure" className="text-right">
                   Measure Date
@@ -2322,7 +2285,6 @@ const handleConfirmDeleteDrawing = async () => {
                 />
               </div>
 
-              {/* Notes */}
               <div className="grid grid-cols-4 items-start gap-4">
                 <Label htmlFor="notes" className="pt-2 text-right">
                   Notes
@@ -2349,6 +2311,7 @@ const handleConfirmDeleteDrawing = async () => {
         </DialogContent>
       </Dialog>
 
+      {/* FORM LINK DIALOG */}
       <Dialog open={showLinkDialog} onOpenChange={setShowLinkDialog}>
         <DialogContent>
           <DialogHeader>
@@ -2368,6 +2331,7 @@ const handleConfirmDeleteDrawing = async () => {
         </DialogContent>
       </Dialog>
 
+      {/* DELETE DRAWING DIALOG */}
       <Dialog open={showDeleteDrawingDialog} onOpenChange={setShowDeleteDrawingDialog}>
         <DialogContent>
           <DialogHeader>
@@ -2385,7 +2349,7 @@ const handleConfirmDeleteDrawing = async () => {
               Cancel
             </Button>
             <Button
-              onClick={handleConfirmDeleteDrawing}   // <-- call the real delete
+              onClick={handleConfirmDeleteDrawing}
               disabled={isDeletingDrawing}
               className="bg-red-600 text-white hover:bg-red-700"
             >
@@ -2395,6 +2359,31 @@ const handleConfirmDeleteDrawing = async () => {
         </DialogContent>
       </Dialog>
 
+      {/* DELETE FORM DIALOG */}
+      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Form Submission</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this form submission? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleDeleteForm}
+              disabled={isDeleting}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* FORM DIALOG - Truncated for brevity, remains the same as original */}
       <Dialog open={showFormDialog} onOpenChange={setShowFormDialog}>
         <DialogContent className="h-[85vh] w-[85vw] max-w-none overflow-hidden rounded-lg p-0">
           <div className="flex items-start justify-between border-b bg-white px-6 py-4">
@@ -2406,19 +2395,16 @@ const handleConfirmDeleteDrawing = async () => {
                 Submitted: {selectedForm ? formatDate(selectedForm.submitted_at) : "—"}
               </DialogDescription>
             </div>
-            {/* Close Button */}
             <Button
               variant="ghost"
               size="icon"
               onClick={() => setShowFormDialog(false)}
-              className="absolute top-4 right-4" // Position it
+              className="absolute top-4 right-4"
             >
               <X className="h-5 w-5" />
             </Button>
           </div>
           <div className="h-[calc(85vh-72px)] overflow-auto bg-gray-50 p-6">
-            {" "}
-            {/* Adjust height calculation if needed */}
             {selectedForm ? (
               (() => {
                 let rawData: Record<string, any> = {};
@@ -2428,7 +2414,7 @@ const handleConfirmDeleteDrawing = async () => {
                       ? JSON.parse(selectedForm.form_data)
                       : selectedForm.form_data || {};
                 } catch {
-                  rawData = selectedForm.form_data || {}; // Fallback if parsing fails
+                  rawData = selectedForm.form_data || {};
                 }
 
                 const currentFormType = getFormType(selectedForm);
@@ -2441,18 +2427,16 @@ const handleConfirmDeleteDrawing = async () => {
                   return renderReceiptData(rawData);
                 }
 
-                // Default rendering for kitchen/bedroom forms
                 const inferredType = (rawData.form_type || "").toString().toLowerCase().includes("bed")
                   ? "bedroom"
                   : (rawData.form_type || "").toString().toLowerCase().includes("kitchen")
                     ? "kitchen"
-                    : (formType || "").toLowerCase(); // Fallback to state if form_type is missing
+                    : (formType || "").toLowerCase();
 
                 const displayed = new Set<string>();
 
                 const keys = Object.keys(rawData).filter((k) => {
                   const low = k.toLowerCase();
-                  // Filter out internal/unwanted keys
                   if (
                     low.includes("customer_id") ||
                     low === "customerid" ||
@@ -2461,15 +2445,12 @@ const handleConfirmDeleteDrawing = async () => {
                     low === "checklisttype"
                   )
                     return false;
-                  // Filter out values that look like UUIDs (often internal links)
                   if (typeof rawData[k] === "string" && isUUID(rawData[k])) return false;
-                  // Ensure value is not null/empty before showing
                   if (rawData[k] === null || rawData[k] === undefined || rawData[k] === "") return false;
 
                   return true;
                 });
 
-                // Define field groupings
                 const customerInfoFields = ["customer_name", "customer_phone", "customer_address", "room"];
                 const designFields = [
                   "fitting_style",
@@ -2513,32 +2494,21 @@ const handleConfirmDeleteDrawing = async () => {
                   "other_appliances",
                   "appliances",
                 ];
-                const auxiliaryFields = ["sink_tap_customer_owned", "appliances_customer_owned"]; // Fields used for conditional logic
-                const dateFields = [
-                  "appointment_date",
-                  "completion_date",
-                  "deposit_date",
-                  "installation_date",
-                  "survey_date",
-                  "signature_date",
-                  "terms_date",
-                ]; // Fields to be formatted as dates
+                const auxiliaryFields = ["sink_tap_customer_owned", "appliances_customer_owned"];
 
-                // Helper to render a section
                 const renderSection = (title: string, fields: string[], typeCondition?: string) => {
-                  if (typeCondition && inferredType !== typeCondition) return null; // Skip if type doesn't match
+                  if (typeCondition && inferredType !== typeCondition) return null;
 
                   const sectionKeys = fields.filter((k) => keys.includes(k));
-                  if (sectionKeys.length === 0) return null; // Skip empty sections
+                  if (sectionKeys.length === 0) return null;
 
                   return (
                     <section>
                       <h3 className="text-md mb-3 font-semibold text-gray-900">{title}</h3>
                       <div className="rounded-lg bg-white p-4 shadow-sm">
                         {sectionKeys.map((k) => {
-                          displayed.add(k); // Mark as displayed
+                          displayed.add(k);
 
-                          // Special handling for kitchen appliances/sink/tap based on ownership
                           if (inferredType === "kitchen") {
                             const sinkTapOwned = String(rawData.sink_tap_customer_owned).trim().toLowerCase() === "yes";
                             const appliancesOwned =
@@ -2550,10 +2520,9 @@ const handleConfirmDeleteDrawing = async () => {
                             if ((k === "other_appliances" || k === "appliances") && appliancesOwned) {
                               return <Row key={k} label={humanizeLabel(k)} value="Customer Owned" name={k} />;
                             }
-                            // Handle appliance array structure
                             if (k === "appliances" && Array.isArray(rawData[k])) {
                               const appliancesList = rawData[k]
-                                .filter((app: any) => app.details || app.order_date) // Filter out empty entries
+                                .filter((app: any) => app.details || app.order_date)
                                 .map((app: any) => {
                                   const details = app.details || "N/A";
                                   const orderDate = app.order_date
@@ -2561,12 +2530,11 @@ const handleConfirmDeleteDrawing = async () => {
                                     : "";
                                   return `${details}${orderDate}`;
                                 })
-                                .join("; "); // Join with semicolon for clarity
+                                .join("; ");
                               return <Row key={k} label={humanizeLabel(k)} value={appliancesList || "—"} name={k} />;
                             }
                           }
 
-                          // Special handling for signature image
                           if (k === "signature_data" && rawData[k]) {
                             return (
                               <div
@@ -2592,7 +2560,6 @@ const handleConfirmDeleteDrawing = async () => {
                   );
                 };
 
-                // Render sections in order
                 return (
                   <div className="space-y-6">
                     {renderSection("Customer Information", customerInfoFields)}
@@ -2602,7 +2569,6 @@ const handleConfirmDeleteDrawing = async () => {
                     {renderSection("Terms & Information", termsFields)}
                     {renderSection("Customer Signature", signatureFields)}
 
-                    {/* Render any remaining fields that weren't in specific sections */}
                     {keys.filter((k) => !displayed.has(k) && !auxiliaryFields.includes(k)).length > 0 && (
                       <section>
                         <h3 className="text-md mb-3 font-semibold text-gray-900">Additional Information</h3>

@@ -1,6 +1,6 @@
 "use client";
-import React, { useState } from "react";
-import { X, Search } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { X, Search, UserCheck } from "lucide-react"; // Added UserCheck icon
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,14 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { fetchWithAuth } from "@/lib/api"; // Import the centralized API helper
+// Removed Select imports as they are no longer used for Salesperson
+import { fetchWithAuth } from "@/lib/api";
 
 type ProjectType = 'Bedroom' | 'Kitchen' | 'Other';
 
@@ -39,18 +33,48 @@ interface CreateCustomerModalProps {
   onCustomerCreated: () => void;
 }
 
+// Custom Hook for persistent salesperson list
+const useSalespersons = () => {
+  const [salespersons, setSalespersons] = useState<string[]>([]);
+
+  useEffect(() => {
+    // Load from localStorage on mount
+    const stored = localStorage.getItem('salespersons');
+    if (stored) {
+      setSalespersons(JSON.parse(stored));
+    }
+  }, []);
+
+  const addSalesperson = (name: string) => {
+    const trimmedName = name.trim();
+    if (!trimmedName || salespersons.includes(trimmedName)) return;
+
+    // Add new name and save to localStorage
+    setSalespersons(prev => {
+      const newNames = [...prev, trimmedName].sort();
+      localStorage.setItem('salespersons', JSON.stringify(newNames));
+      return newNames;
+    });
+  };
+
+  return { salespersons, addSalesperson };
+};
+
+
 export function CreateCustomerModal({
   isOpen,
   onClose,
   onCustomerCreated,
 }: CreateCustomerModalProps) {
+  const { salespersons, addSalesperson } = useSalespersons(); // Use the new hook
+
   const [formData, setFormData] = useState({
     name: "",
     phone: "",
     email: "",
     address: "",
     postcode: "",
-    salesperson: "",
+    salesperson: "", // State remains string for single selection
     project_types: [] as ProjectType[],
     marketing_opt_in: false,
     notes: "",
@@ -96,7 +120,6 @@ export function CreateCustomerModal({
 
     try {
       const apiKey = '4cu8sEIbO0-xTvMTuNam1A48205';
-      // Use the Find endpoint - returns all addresses in ONE call
       const cleanPostcode = formData.postcode.replace(/\s/g, '');
       const response = await fetch(
         `https://api.getaddress.io/find/${encodeURIComponent(cleanPostcode)}?api-key=${apiKey}&expand=true`
@@ -104,7 +127,6 @@ export function CreateCustomerModal({
 
       if (response.ok) {
         const data = await response.json();
-        console.log("API Response:", data);
         
         if (data.addresses && data.addresses.length > 0) {
           const formattedAddresses: Address[] = data.addresses.map((addr: any) => ({
@@ -114,27 +136,18 @@ export function CreateCustomerModal({
             post_town: addr.town_or_city || addr.formatted_address?.[5] || '',
             postcode: formData.postcode,
             formatted_address: addr.formatted_address?.filter(Boolean).join(', ') || 
-                            [addr.line_1, addr.line_2, addr.line_3, addr.town_or_city, formData.postcode]
-                              .filter(Boolean).join(', ')
+                                [addr.line_1, addr.line_2, addr.line_3, addr.town_or_city, formData.postcode]
+                                  .filter(Boolean).join(', ')
           }));
           
           setAddresses(formattedAddresses);
-          console.log("Formatted addresses:", formattedAddresses);
         } else {
-          console.log("No addresses in response");
           setShowManualAddress(true);
         }
       } else {
-        const errorText = await response.text();
-        console.error("API Error:", response.status, response.statusText, errorText);
-        
-        if (response.status === 404) {
-          alert("No addresses found for this postcode, or API key issue.");
-        }
         setShowManualAddress(true);
       }
     } catch (error) {
-      console.error("Error fetching addresses:", error);
       setShowManualAddress(true);
     } finally {
       setLoadingAddresses(false);
@@ -186,9 +199,12 @@ export function CreateCustomerModal({
     setSubmitting(true);
 
     try {
-      // Use the centralized fetchWithAuth function
-      // It will automatically handle the token and construct the correct URL
-      const response = await fetchWithAuth('/customers', { // ✅ Add leading slash
+      // 🌟 STEP 1: Add new salesperson to the persistent list if a name was entered
+      if (formData.salesperson.trim()) {
+        addSalesperson(formData.salesperson);
+      }
+      
+      const response = await fetchWithAuth('/customers', {
         method: "POST",
         body: JSON.stringify(formData),
       });
@@ -238,6 +254,7 @@ export function CreateCustomerModal({
         </DialogHeader>
 
         <div className="space-y-6 py-4">
+          {/* ... (Existing Name, Phone, Email, Postcode, Address fields) ... */}
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col space-y-1.5">
               <Label htmlFor="name">
@@ -315,6 +332,7 @@ export function CreateCustomerModal({
               <Label htmlFor="address-select">
                 Select Address <span className="text-red-500">*</span>
               </Label>
+              {/* ... (Existing Address Select/Dropdown) ... */}
               <Select 
                 value={selectedAddressIndex}
                 onValueChange={selectAddress}
@@ -371,23 +389,32 @@ export function CreateCustomerModal({
           )}
 
           <div className="grid grid-cols-2 gap-4">
+            {/* 🌟 START: Salesperson Custom Input/Tags */}
             <div className="flex flex-col space-y-1.5">
               <Label htmlFor="salesperson">Salesperson</Label>
-              <Select
+              <Input
+                id="salesperson"
+                placeholder="Type new or select existing"
                 value={formData.salesperson}
-                onValueChange={(value) => handleChange("salesperson", value)}
-              >
-                <SelectTrigger id="salesperson">
-                  <SelectValue placeholder="Select salesperson" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Alice Smith">Alice Smith</SelectItem>
-                  <SelectItem value="Bob Johnson">Bob Johnson</SelectItem>
-                  <SelectItem value="Carol Williams">Carol Williams</SelectItem>
-                  <SelectItem value="David Brown">David Brown</SelectItem>
-                </SelectContent>
-              </Select>
+                onChange={(e) => handleChange("salesperson", e.target.value)}
+              />
+              <div className="flex flex-wrap gap-2 mt-2 pt-1">
+                {salespersons.map((person) => (
+                  <Button
+                    key={person}
+                    type="button"
+                    variant={formData.salesperson === person ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => handleChange("salesperson", person)}
+                    className="flex items-center"
+                  >
+                    {person}
+                    {formData.salesperson === person && <UserCheck className="h-4 w-4 ml-1" />}
+                  </Button>
+                ))}
+              </div>
             </div>
+            {/* 🌟 END: Salesperson Custom Input/Tags */}
 
             <div className="flex flex-col space-y-1.5">
               <Label>Project Type</Label>
@@ -435,6 +462,7 @@ export function CreateCustomerModal({
             </div>
           </div>
 
+          {/* ... (Existing Marketing and Notes fields) ... */}
           <div className="flex items-center space-x-2">
             <Checkbox
               id="marketing"

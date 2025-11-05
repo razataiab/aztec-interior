@@ -105,6 +105,7 @@ export default function CustomersPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const router = useRouter();
   const { user } = useAuth();
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     fetchCustomers();
@@ -147,9 +148,9 @@ export default function CustomersPage() {
   }, [user, allCustomers]);
 
   const fetchCustomers = async () => {
+    setIsLoading(true);
     try {
       const token = localStorage.getItem("auth_token");
-
       const response = await fetch("https://aztec-interiors.onrender.com/customers", {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -157,16 +158,27 @@ export default function CustomersPage() {
       });
 
       if (response.ok) {
-        const data = await response.json();
-        console.log("Raw API Response:", data); // <-- Add this line*
-        setAllCustomers(data);
-      } else {
+        const data = await response.json();
+
+        // Normalise API → UI
+        const normalised = data.map((c: any) => ({
+          ...c,
+          postcode: c.post_code ?? c.postcode ?? "", // <-- the fix
+          post_code: undefined, // optional cleanup
+        }));
+
+        console.log("Raw API Response:", data);
+        console.log("Normalised customers:", normalised);
+        setAllCustomers(normalised);
+      } else {
         console.error("Failed to fetch customers:", response.status);
-        setAllCustomers([]); // Set empty array on error
+        setAllCustomers([]);
       }
     } catch (err) {
       console.error("Error fetching customers:", err);
-      setAllCustomers([]); // Set empty array on error
+      setAllCustomers([]);
+    } finally {
+      setIsLoading(false);
     }
   };
 

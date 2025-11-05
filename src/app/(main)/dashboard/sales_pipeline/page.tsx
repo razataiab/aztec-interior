@@ -44,8 +44,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { fetchWithAuth } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
-const router = useRouter();
-
 // --- START OF STAGE AND ROLE DEFINITIONS ---
 
 const STAGES = [
