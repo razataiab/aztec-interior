@@ -643,11 +643,21 @@ export default function EnhancedPipelinePage() {
       return p && p.column !== n.column;
     });
 
-    if (moved.length === 0) return;
+    // 🔍 DEBUG: Log what was moved
+    console.log("🔍 Moved items:", moved);
+    console.log("🔍 Previous features count:", prev.length);
+    console.log("🔍 Next features count:", next.length);
+
+    if (moved.length === 0) {
+      console.log("⚠️ No items detected as moved!");
+      return;
+    }
 
     const stageUpdates = new Map(
       moved.map((item) => [item.itemId, columnIdToStage(item.column)]),
     );
+
+    console.log("🔍 Stage updates map:", Array.from(stageUpdates.entries()));
 
     const unauthorizedMoves = moved.filter((item) => {
       const originalItem = pipelineItems.find((pi) => pi.id === item.itemId);
@@ -660,65 +670,113 @@ export default function EnhancedPipelinePage() {
       return;
     }
 
+    const previousFeaturesSnapshot = prevFeaturesRef.current;
+    const previousPipelineSnapshot = pipelineItems;
+
+    const movedIds = new Set(moved.map((item) => item.id));
+    const nextById = new Map(next.map((item) => [item.id, item]));
+
+    const optimisticallyUpdatedFeatures = features.map((feature) => {
+      if (!movedIds.has(feature.id)) {
+        return feature;
+      }
+
+      const nextFeature = nextById.get(feature.id);
+      const nextColumn = nextFeature?.column ?? feature.column;
+      const nextStage = stageUpdates.get(feature.itemId) ?? feature.stage;
+
+      return {
+        ...feature,
+        column: nextColumn,
+        stage: nextStage,
+      };
+    });
+
+    setFeatures(optimisticallyUpdatedFeatures);
+    prevFeaturesRef.current = optimisticallyUpdatedFeatures;
+
+    setPipelineItems((current) =>
+      current.map((item) => {
+        const newStage = stageUpdates.get(item.id);
+        if (!newStage) {
+          return item;
+        }
+
+        return {
+          ...item,
+          stage: newStage,
+        };
+      }),
+    );
+
     console.log("🎯 Drag detected. Making API call...");
 
-    try {
-      const updatePromises = moved.map(async (item) => {
-        const newStage = columnIdToStage(item.column);
+  try {
+    const updatePromises = moved.map(async (item) => {
+      const newStage = columnIdToStage(item.column);
 
-        const isProject = item.itemId.startsWith("project-");
-        const isCustomer = item.itemId.startsWith("customer-");
-        const isJob = item.itemId.startsWith("job-");
+      const isProject = item.itemId.startsWith("project-");
+      const isCustomer = item.itemId.startsWith("customer-");
+      const isJob = item.itemId.startsWith("job-");
 
-        let entityId;
-        let endpoint;
+      let entityId;
+      let endpoint;
 
-        if (isJob) {
-          entityId = item.itemId.replace("job-", "");
-          endpoint = `jobs/${entityId}/stage`;
-        } else if (isProject) {
-          entityId = item.itemId.replace("project-", "");
-          endpoint = `projects/${entityId}/stage`;
-        } else if (isCustomer) {
-          entityId = item.itemId.replace("customer-", "");
-          endpoint = `customers/${entityId}/stage`;
-        } else {
-          throw new Error(`Unknown pipeline item type: ${item.itemId}`);
-        }
+      if (isJob) {
+        entityId = item.itemId.replace("job-", "");
+        endpoint = `jobs/${entityId}/stage`;
+      } else if (isProject) {
+        entityId = item.itemId.replace("project-", "");
+        endpoint = `projects/${entityId}/stage`;
+      } else if (isCustomer) {
+        entityId = item.itemId.replace("customer-", "");
+        endpoint = `customers/${entityId}/stage`;
+      } else {
+        throw new Error(`Unknown pipeline item type: ${item.itemId}`);
+      }
 
-        const bodyData = {
-          stage: newStage,
-          reason: "Moved via Kanban board",
-          updated_by: user?.email || "current_user",
-        };
+      const bodyData = {
+        stage: newStage,
+        reason: "Moved via Kanban board",
+        updated_by: user?.email || "current_user",
+      };
 
-        console.log(`📤 Updating ${item.itemType} ${entityId} to ${newStage}...`);
-
-        const response = await fetchWithAuth(endpoint, {
-          method: "PATCH",
-          body: JSON.stringify(bodyData),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || `Failed to update ${item.itemType} ${entityId}`);
-        }
-
-        const result = await response.json();
-        console.log(`✅ Successfully updated to ${newStage}`);
-        return result;
+      // 🔍 DEBUG: Log the API call
+      console.log(`📤 API Call:`, {
+        endpoint,
+        method: "PATCH",
+        itemId: item.itemId,
+        itemType: item.itemType,
+        entityId,
+        bodyData,
       });
 
-      await Promise.all(updatePromises);
-      console.log("✅ All updates successful! Refreshing...");
-      
-      // Refetch immediately - no delay needed
-      await refetchPipelineData();
+      const response = await fetchWithAuth(endpoint, {
+        method: "PATCH",
+        body: JSON.stringify(bodyData),
+      });
 
-    } catch (error) {
-      console.error("❌ Failed to update stages:", error);
-      setFeatures(prev);
-      prevFeaturesRef.current = prev;
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error(`❌ API Error:`, errorData);
+        throw new Error(errorData.error || `Failed to update ${item.itemType} ${entityId}`);
+      }
+
+      const result = await response.json();
+      console.log(`✅ API Success:`, result);
+      return result;
+    });
+
+    await Promise.all(updatePromises);
+    console.log("✅ All updates successful! Refreshing...");
+    
+    await refetchPipelineData();
+
+  } catch (error) {
+    console.error("❌ Failed to update stages:", error);
+      setFeatures(previousFeaturesSnapshot);
+      prevFeaturesRef.current = previousFeaturesSnapshot;
+      setPipelineItems(previousPipelineSnapshot);
       alert(
         `Failed to update stage: ${error instanceof Error ? error.message : "Unknown error"}. Changes have been reverted.`,
       );
